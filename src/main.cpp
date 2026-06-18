@@ -5,6 +5,7 @@
 #include "opencv2/highgui/highgui.hpp"
 #include <stdio.h>
 #include <vector>
+#include <cmath>
 #include <algorithm>
 #include <map>
 #include <string>
@@ -25,6 +26,18 @@ struct lightbors
     bool righting = 0;
 };
 
+
+// 角度矫正函数(针对于Opencv矩形拟合的狗屎算法)
+float getright_angle(const cv::RotatedRect& rect) {
+    float angle = rect.angle;          // 总是 width 边的方向，∈[-90°, 0°]
+    if (rect.size.width < rect.size.height)
+        angle += 90.f;                // 现在 angle 是 height 边（长边）的方向
+
+    // 归一化到 [0, 180)
+    if (angle < 0.f)   angle += 180.f;   // 例如 -10° → 170°
+    if (angle >= 180.f) angle -= 180.f;  // 理论上不会超过 180，但可防万一
+    return angle;
+}
 
 // 长边拉长函数
 cv::RotatedRect stretchLongSide(const cv::RotatedRect& rect, float scale) {
@@ -89,8 +102,8 @@ void points_exchange(Point2f points[4]) {
 // 装甲板计算函数
 void set_light(lightbors& armor_light){
 
-    armor_light.left_lightbors = stretchLongSide(armor_light.left_lightbors, 2.2f);
-    armor_light.right_lightbors = stretchLongSide(armor_light.right_lightbors, 2.2f);
+    armor_light.left_lightbors = stretchLongSide(armor_light.left_lightbors, 2.4f);
+    armor_light.right_lightbors = stretchLongSide(armor_light.right_lightbors, 2.4f);
     // 获取角点并放进数组内部
     Point2f left_points[4];
     Point2f right_points[4];
@@ -300,6 +313,7 @@ int main(){
     CameraSetAeState(hCamera, false);
     setStatues = CameraSetExposureTime(hCamera, 3000);
     CameraSetGain(hCamera, 100, 70, 50);
+    // CameraSetSaturation(hCamera, 200);
     // CameraGetExposureLineTime(hCamera, pfExposureTime);
     // printf("compuse = %lf", *pfExposureTime);
     printf("statue = %d\n", setStatues);
@@ -329,17 +343,24 @@ int main(){
             cv::Mat grayImage;
             cv::cvtColor(matImage, grayImage, cv::COLOR_BGR2GRAY);
             cv::Mat endImage;
+            // cv::threshold(grayImage, endImage, 4, 255, cv::THRESH_TOZERO);
+            // cv::threshold(endImage, endImage, 10, 255, cv::THRESH_TOZERO_INV);
+            // cv::Mat reduceguss;
+            // cv::GaussianBlur(endImage, reduceguss, cv::Size(5, 5), 0);
+            // cv::Mat process;
+            // cv::threshold(reduceguss, process, 10, 0, cv::THRESH_TRUNC);
+            // cv::Mat end;
+            // cv::threshold(process, end, 2, 255, cv::THRESH_BINARY);
+            // cv::Mat end_canny;
+            // cv::Canny(end, end_canny, 120, 200);
+            // cv::Mat the_end;
             cv::threshold(grayImage, endImage, 4, 255, cv::THRESH_TOZERO);
             cv::threshold(endImage, endImage, 10, 255, cv::THRESH_TOZERO_INV);
-            cv::Mat reduceguss;
-            cv::GaussianBlur(endImage, reduceguss, cv::Size(5, 5), 0);
-            cv::Mat process;
-            cv::threshold(reduceguss, process, 10, 0, cv::THRESH_TRUNC);
-            cv::Mat end;
-            cv::threshold(process, end, 2, 255, cv::THRESH_BINARY);
-            cv::Mat end_canny;
-            cv::Canny(end, end_canny, 120, 200);
-            cv::Mat the_end;
+            cv::GaussianBlur(endImage, grayImage, cv::Size(5, 5), 0);
+            cv::threshold(grayImage, endImage, 10, 0, cv::THRESH_TRUNC);
+            cv::threshold(endImage, grayImage, 2, 255, cv::THRESH_BINARY);
+            cv::Canny(grayImage, endImage, 120, 200);
+            
 
             /*      此内容为灯条检测部分
                     作用为测试灯条检测如何编写
@@ -349,8 +370,8 @@ int main(){
             cv::Mat r = channels[2];
             cv::Mat mask;
             cv::threshold(r, mask, 150, 255, cv::THRESH_BINARY);
-            cv::Mat mask3c;
-            cv::cvtColor(mask, mask3c, cv::COLOR_GRAY2BGR);
+            // cv::Mat kernel = getStructuringElement(MORPH_RECT, Size(5, 5));
+            // dilate(mask, r, kernel);
             std::vector<std::vector<cv::Point>> counters;
             cv::findContours(mask, counters, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
             std::vector<cv::RotatedRect> end_rects;
@@ -359,20 +380,27 @@ int main(){
             for(auto& cnt : counters){
                 cv::RotatedRect rotRect = cv::minAreaRect(cnt);
 
+                // 面积检测筛选
                 float area = rotRect.size.width * rotRect.size.height;
                 if (area < 50 || area > 9000) continue;
+
+                // 灯条比例筛选
                 float width = std::min(rotRect.size.width, rotRect.size.height);
                 float height = std::max(rotRect.size.width, rotRect.size.height);
                 float ratio = height / width;
-                if (ratio < 4 || ratio > 26) continue;
+                if (ratio < 4 || ratio > 15) continue;
+
+                // 灯条合理角度筛选
+                if(getright_angle(rotRect) < 5 || getright_angle(rotRect) > 175)continue;
+
                 end_rects.push_back(rotRect);
 
                 cv::Point2f pts[4];
                 rotRect.points(pts);
-                // for (int i = 0; i < 4; i++)
-                // {
-                //     cv::line(result, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
-                // }
+                for (int i = 0; i < 4; i++)
+                {
+                    cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
+                }
                 
             }
 
@@ -381,21 +409,22 @@ int main(){
                 // 灯条配对逻辑
                 for(size_t i = 0; i < end_rects.size()-1; i++){
                     for(size_t j = i + 1; j < end_rects.size(); j++){
-
+ 
                         /*
                         *****    灯条匹配逻辑      ******
                         */
                         // 倾斜角度偏差检测
-                        float angle_TF = end_rects[i].angle - end_rects[j].angle;
-                        if (fabs(angle_TF) > 6)continue;
+                        float angle_TF = getright_angle(end_rects[i]) - getright_angle(end_rects[j]);
+                        if (fabs(angle_TF) > 8)continue;
                         
                         // 灯条距离与灯条长度比值检测
                         float first_max = std::max(end_rects[i].size.width, end_rects[i].size.height);
                         float second_max = std::max(end_rects[j].size.width, end_rects[j].size.height);
-                        float getheight = end_rects[i].center.x - end_rects[j].center.x;
+                        float getheight = sqrt(pow(end_rects[i].center.x - end_rects[j].center.x, 2)+pow(end_rects[i].center.y - end_rects[j].center.y, 2));
                         float getlight = (first_max + second_max) / 2;
-                        float distance_TF = std::fabs(getheight) / getlight;
-                        if (distance_TF > 2.9 || distance_TF < 2.0)continue;
+                        float distance_TF = getheight / getlight;
+                        if (distance_TF > 3.7 || distance_TF < 2.0)continue;
+                        // if ((first_max / second_max) > 1.6 || (first_max / second_max) < 0.4)continue;
 
                         /*
                         *****   灯条归位并定点    *****
@@ -419,22 +448,39 @@ int main(){
                     }
                 }
 
-                // 此处为字符识别部分，为了降低算力，采用自研的识别算法
-                for(auto& cnt_string : armor){
-                    cv::Mat ROI;
-                    CropAndResize(cnt_string, end_canny, ROI);
+                // 装甲板清理步骤，将所有共线装甲板清楚
+                for(size_t i = 0; i+2 < armor.size(); ++i){
 
-                    std::vector<std::vector<cv::Point>> contours;
-                    cv::findContours(ROI, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-                    distinguish(cnt_string, contours);
-                }
+                    lightbors& first = armor[i];
+                    lightbors& second = armor[i+1];
+                    lightbors& third = armor[i+2];
+
+                    cv::Point2f& first_position = first.right_lightbors.center;
+                    cv::Point2f& second_left_position = second.left_lightbors.center;
+                    cv::Point2f& second_right_position = second.right_lightbors.center;
+                    cv::Point2f& third_position = third.left_lightbors.center;
+                    
+                    if(first_position == second_left_position && second_right_position == third_position){
+                        armor.erase(armor.begin() + (i+1));
+                    }else{continue;}
+                // }
+
+                // // 此处为字符识别部分，为了降低算力，采用自研的识别算法
+                // for(auto& cnt_string : armor){
+                //     cv::Mat ROI;
+                //     CropAndResize(cnt_string, endImage, ROI);
+
+                //     std::vector<std::vector<cv::Point>> contours;
+                //     cv::findContours(ROI, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+                //     distinguish(cnt_string, contours);
+                // }
 
                 // 将疑似装甲板全部绘制出来       并配上识别字符
                 for(auto& cnt : armor){
                     
-                    if(cnt.righting){
-                        cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
-                    }
+                    // if(cnt.righting){
+                    //     cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
+                    // }
                     for (int i = 0; i < 4; i++)
                     {
                         cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
@@ -443,7 +489,7 @@ int main(){
             }
 
             imshow("Tracking", matImage);
-            // imshow("tae", end_canny);
+            imshow("tae", mask);
 
             waitKey(5);
 
