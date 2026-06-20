@@ -24,8 +24,10 @@ struct lightbors
     cv::Point2f armor_point[4];     // 次序为 左上 -> 右上 -> 右下 -> 左下
     std::string ID;         // 装甲板数字
     bool righting = 0;
-};
 
+    // 反馈当前检测各参数
+    std::string test_ID;
+};
 
 // 角度矫正函数(针对于Opencv矩形拟合的狗屎算法)
 float getright_angle(const cv::RotatedRect& rect) {
@@ -125,151 +127,139 @@ void set_light(lightbors& armor_light){
 
 }
 
-/*
-// // 透视变换获取图像 并进行特征变换变为 64 * 64
-// void Per_transformation(const lightbors& armor_light, cv::Mat& endB, cv::Mat outImage){
-    
-//     int dst_w = 64;
-//     int dst_h = 64;
-
-//     std::vector<cv::Point2f> dst_pts = {
-//         {0.0f,          0.0f},
-//         {(float)dst_w,  0.0f},
-//         {(float)dst_w,  (float)dst_h},
-//         {0.0f,          (float)dst_h}
-//     };
-
-//     cv::Mat M = cv::getPerspectiveTransform(armor_light.armor_point, dst_pts.data());
-//     std::cout << "[DEBUG] M empty: " << M.empty() << std::endl;
-
-//     cv::warpPerspective(endB, outImage, M, cv::Size(dst_w, dst_h));
-
-// }
-*/
-
+// 获取待检测的ROI
 void CropAndResize(const lightbors& armor_light, cv::Mat& endB, cv::Mat& outImage) {
     
     int dst_w = 64;
     int dst_h = 64;
 
-    // 计算 armor_point 四个角点的外接矩形
-    float min_x = std::min({armor_light.armor_point[0].x, armor_light.armor_point[1].x, 
-                            armor_light.armor_point[2].x, armor_light.armor_point[3].x});
-    float max_x = std::max({armor_light.armor_point[0].x, armor_light.armor_point[1].x, 
-                            armor_light.armor_point[2].x, armor_light.armor_point[3].x});
-    float min_y = std::min({armor_light.armor_point[0].y, armor_light.armor_point[1].y, 
-                            armor_light.armor_point[2].y, armor_light.armor_point[3].y});
-    float max_y = std::max({armor_light.armor_point[0].y, armor_light.armor_point[1].y, 
-                            armor_light.armor_point[2].y, armor_light.armor_point[3].y});
+    // armor_point[0~3] 四个角点（假设顺序：左上、右上、右下、左下，顺时针或逆时针均可）
+    cv::Point2f srcPts[4] = {
+        armor_light.armor_point[0],
+        armor_light.armor_point[1],
+        armor_light.armor_point[2],
+        armor_light.armor_point[3]
+    };
 
-    // 限制在图像范围内
-    int x = std::max(0, static_cast<int>(min_x));
-    int y = std::max(0, static_cast<int>(min_y));
-    int width  = std::min(static_cast<int>(max_x) - x, endB.cols - x);
-    int height = std::min(static_cast<int>(max_y) - y, endB.rows - y);
+    // ========== 计算各边中点 ==========
+    // 上边中点（0和1之间）
+    cv::Point2f mid_top    = (srcPts[0] + srcPts[1]) * 0.5f;
+    // 下边中点（3和2之间）  
+    cv::Point2f mid_bottom = (srcPts[3] + srcPts[2]) * 0.5f;
+    // 左边中点（0和3之间）
+    cv::Point2f mid_left   = (srcPts[0] + srcPts[3]) * 0.5f;
+    // 右边中点（1和2之间）
+    cv::Point2f mid_right  = (srcPts[1] + srcPts[2]) * 0.5f;
 
-    if (width <= 0 || height <= 0) {
-        std::cerr << "[ERROR] Invalid crop region!" << std::endl;
-        outImage = cv::Mat::zeros(dst_h, dst_w, endB.type());
-        return;
-    }
+    // ========== 构建新的四个角点（截取中间一半长度）==========
+    // 
+    // 原理：以竖直方向（左右边中点连线）为基准
+    // 上边从中心往两边各取一半（即原长的1/4处）
+    // 这样新上边长度 = 原上边长度 / 2
+    //
+    // 新左上 = 上边中点 + (原左上 - 上边中点) * 0.5
+    //       = 上边中点往左上方向走一半距离
+    cv::Point2f new_top_left  = mid_top + (srcPts[0] - mid_top) * 0.5f;
+    cv::Point2f new_top_right = mid_top + (srcPts[1] - mid_top) * 0.5f;
+    
+    // 下边同理
+    cv::Point2f new_bottom_right = mid_bottom + (srcPts[2] - mid_bottom) * 0.5f;
+    cv::Point2f new_bottom_left  = mid_bottom + (srcPts[3] - mid_bottom) * 0.5f;
 
-    // 截取 ROI 并缩放到 64x64
-    cv::Rect roi(x, y, width, height);
-    cv::Mat cropped = endB(roi).clone();
-    cv::resize(cropped, outImage, cv::Size(dst_w, dst_h));
+    // 源四边形（截取后的区域）
+    cv::Point2f srcQuad[4] = {
+        new_top_left,      // 新左上
+        new_top_right,     // 新右上
+        new_bottom_right,  // 新右下
+        new_bottom_left    // 新左下
+    };
+
+    // 目标矩形（正放，64x64）
+    cv::Point2f dstQuad[4] = {
+        cv::Point2f(0, 0),              // 左上
+        cv::Point2f(dst_w - 1, 0),     // 右上
+        cv::Point2f(dst_w - 1, dst_h - 1), // 右下
+        cv::Point2f(0, dst_h - 1)      // 左下
+    };
+
+    // ========== 透视变换 ==========
+    cv::Mat transform = cv::getPerspectiveTransform(srcQuad, dstQuad);
+    cv::warpPerspective(endB, outImage, transform, cv::Size(dst_w, dst_h));
 }
 
 // 自研分类算法
-void distinguish(lightbors& armor_light, std::vector<std::vector<cv::Point>>& contours){
-    // 空集反馈
-    if (contours.empty()){
-        armor_light.ID = "UNKNOWN";
-        armor_light.righting = 0;
-        std::cout << "error" << std::endl;
-        return;
-    } 
-
-    int max_idx = 0;
-    double max_area = 0;
-    for (int i = 0; i < contours.size(); i++)
-    {
-        double area = cv::contourArea(contours[i]);
-        if(area > max_area){
-            max_area = area;
-            max_idx = i;
+class FeatureDetector8Classes {
+private:
+    cv::Ptr<cv::ml::SVM> svm;
+    cv::HOGDescriptor hog;
+    cv::Size imgSize = cv::Size(48, 36); // 归一化尺寸，需与训练时一致
+    
+    // 映射表：SVM输出的索引 0~7 对应您的8个特征名称
+    std::vector<std::string> class_names = {"1", "2", "3", "4", "5", "6", "7", "sentinel"};
+ 
+public:
+    FeatureDetector8Classes() {
+        // 初始化HOG参数（低算力优选参数）
+        hog.winSize = imgSize;
+        hog.blockSize = cv::Size(12, 12);
+        hog.blockStride = cv::Size(6, 6);
+        hog.cellSize = cv::Size(6, 6);
+        hog.nbins = 9;
+        
+        // 加载训练好的SVM模型
+        try {
+            svm = cv::ml::SVM::load("asset/svm_model.xml");
+            if (svm.empty()) {
+                std::cerr << "模型加载失败" << std::endl;
+            }
+        } catch (const cv::Exception& e) {
+            std::cerr << "模型加载异常: " << e.what() << std::endl;
+            svm.release();
         }
     }
-    auto& contour = contours[max_idx];
+ 
+    /**
+     * 检测特征并返回特征名称
+     * @param inputImg 输入的局部特征图像 (BGR格式)
+     * @return 返回特征名称，失败返回 "unknown"
+     */
+    std::string detect(const cv::Mat& inputImg, lightbors& armor_light) {
+        if (inputImg.empty()) return "unknown";
+ 
+        // ================= 1. 图像归一化处理 =================
+        cv::Mat normalizedImg;
+        // 尺寸归一化
+        resize(inputImg, normalizedImg, imgSize, 0, 0, cv::INTER_LINEAR);
 
-    // ========== 特征 1：多边形顶点数 ==========
-    std::vector<cv::Point> approx;
-    double epsilon = 0.02 * cv::arcLength(contour, true);
-    cv::approxPolyDP(contour, approx, epsilon, true);
-    int vertices = approx.size();
-
-   // ========== 特征 2：凸缺陷 ==========
-    std::vector<int> hull_indices;
-    cv::convexHull(contour, hull_indices, false, false);
-    std::vector<cv::Vec4i> defects; 
-    int defect_count = 0;
-
-    try {
-        cv::convexityDefects(contour, hull_indices, defects);
-        double perimeter = cv::arcLength(contour, true);
-        for (auto& d : defects) {
-            if (d[3] / 256.0 > perimeter * 0.04)
-                defect_count++;
+        if (normalizedImg.channels() == 3) {
+        cvtColor(normalizedImg, normalizedImg, cv::COLOR_BGR2GRAY);
         }
-    } catch (const cv::Exception& e) {
-        // 自相交轮廓，跳过凸缺陷检测
-        defect_count = 0;
-    }
-    
-    // ========== 特征 3：宽高比 ==========
-    cv::Rect rect = cv::boundingRect(contour);
-    double aspect_ratio = (double)rect.width / rect.height;
 
-    // ========== 特征 4：凸性 ==========
-    double area = cv::contourArea(contour);
-    std::vector<cv::Point> hull_pts;
-    cv::convexHull(contour, hull_pts);
-    double hull_area = cv::contourArea(hull_pts);
-    double solidity = (hull_area > 0) ? area / hull_area : 0;
-
-    // ========== 特征 5：实心像素密度 ==========
-    cv::Mat roi_mask = cv::Mat::zeros(64, 64, CV_8UC1);
-    cv::drawContours(roi_mask, contours, max_idx, 255, cv::FILLED);
-    cv::Mat filled;
-    cv::floodFill(roi_mask, cv::Point(32, 32), 255);
-    int filled_pixels = cv::countNonZero(roi_mask);
-    double fill_ratio = (hull_area > 0) ?
-                        (double)filled_pixels / (64.0 * 64.0) : 0;
-    
-    if (vertices >= 20 && fill_ratio > 0.4)
-    {
-        armor_light.righting = 1;
-        armor_light.ID = "sentinel";
-        return;
-    }
-    else if (defect_count == 0 && aspect_ratio < 0.5 && vertices <= 8 )
-    {
-        armor_light.righting = 1;
-        armor_light.ID = "1";
-        return;
-    }
-    else if (defect_count >= 1 && aspect_ratio >= 0.4)
-    {
-        armor_light.righting = 1;
-        armor_light.ID = "3";
-        return;
-    }
-    else{
+        // 光照归一化（抗光照干扰）
+        equalizeHist(normalizedImg, normalizedImg);
+        // ====================================================
+ 
+        // ================= 2. 特征提取 =================
+        std::vector<float> descriptors;
+        hog.compute(normalizedImg, descriptors);
+        cv::Mat featureMat(1, descriptors.size(), CV_32FC1, descriptors.data());
+ 
+        // ================= 3. 分类预测 =================
+        cv::Mat response;
+        svm->predict(featureMat, response);
+        
+        // 获取SVM预测的整数索引 (0~7)
+        int predicted_label = static_cast<int>(response.at<float>(0, 0));
+        
+        // 将索引映射为指定的名称并返回
+        if (predicted_label >= 0 && predicted_label < 8) {
+            armor_light.righting = 1;
+            return class_names[predicted_label];
+        }
         armor_light.righting = 0;
-        armor_light.ID = "UNKNOWN";
-        return;
+        return "unknown";
     }
-}
+};
 
 int main(){
     int iCameraCounts = 1;
@@ -313,9 +303,6 @@ int main(){
     CameraSetAeState(hCamera, false);
     setStatues = CameraSetExposureTime(hCamera, 3000);
     CameraSetGain(hCamera, 100, 70, 50);
-    // CameraSetSaturation(hCamera, 200);
-    // CameraGetExposureLineTime(hCamera, pfExposureTime);
-    // printf("compuse = %lf", *pfExposureTime);
     printf("statue = %d\n", setStatues);
 
     if(tCapability.sIspCapacity.bMonoSensor){
@@ -338,29 +325,6 @@ int main(){
 					g_pRgbBuffer
 					);
 
-            //      测试图像处理代码
-            //       作用为突出数字特征
-            cv::Mat grayImage;
-            cv::cvtColor(matImage, grayImage, cv::COLOR_BGR2GRAY);
-            cv::Mat endImage;
-            // cv::threshold(grayImage, endImage, 4, 255, cv::THRESH_TOZERO);
-            // cv::threshold(endImage, endImage, 10, 255, cv::THRESH_TOZERO_INV);
-            // cv::Mat reduceguss;
-            // cv::GaussianBlur(endImage, reduceguss, cv::Size(5, 5), 0);
-            // cv::Mat process;
-            // cv::threshold(reduceguss, process, 10, 0, cv::THRESH_TRUNC);
-            // cv::Mat end;
-            // cv::threshold(process, end, 2, 255, cv::THRESH_BINARY);
-            // cv::Mat end_canny;
-            // cv::Canny(end, end_canny, 120, 200);
-            // cv::Mat the_end;
-            cv::threshold(grayImage, endImage, 4, 255, cv::THRESH_TOZERO);
-            cv::threshold(endImage, endImage, 10, 255, cv::THRESH_TOZERO_INV);
-            cv::GaussianBlur(endImage, grayImage, cv::Size(5, 5), 0);
-            cv::threshold(grayImage, endImage, 10, 0, cv::THRESH_TRUNC);
-            cv::threshold(endImage, grayImage, 2, 255, cv::THRESH_BINARY);
-            cv::Canny(grayImage, endImage, 120, 200);
-            
 
             /*      此内容为灯条检测部分
                     作用为测试灯条检测如何编写
@@ -401,7 +365,6 @@ int main(){
                 {
                     cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
                 }
-                
             }
 
             armor.clear();
@@ -415,7 +378,7 @@ int main(){
                         */
                         // 倾斜角度偏差检测
                         float angle_TF = getright_angle(end_rects[i]) - getright_angle(end_rects[j]);
-                        if (fabs(angle_TF) > 8)continue;
+                        if (fabs(angle_TF) > 6.5)continue;
                         
                         // 灯条距离与灯条长度比值检测
                         float first_max = std::max(end_rects[i].size.width, end_rects[i].size.height);
@@ -423,8 +386,7 @@ int main(){
                         float getheight = sqrt(pow(end_rects[i].center.x - end_rects[j].center.x, 2)+pow(end_rects[i].center.y - end_rects[j].center.y, 2));
                         float getlight = (first_max + second_max) / 2;
                         float distance_TF = getheight / getlight;
-                        if (distance_TF > 3.7 || distance_TF < 2.0)continue;
-                        // if ((first_max / second_max) > 1.6 || (first_max / second_max) < 0.4)continue;
+                        if (distance_TF > 3.0 || distance_TF < 2.3)continue;
 
                         /*
                         *****   灯条归位并定点    *****
@@ -439,6 +401,14 @@ int main(){
                             armor_light.right_lightbors = end_rects[i];
                         }
 
+                        /* 测试 */
+                        /////////
+                        std::ostringstream oss;
+                        oss << std::fixed << std::setprecision(2);
+                        oss << "angle_TF:" << fabs(angle_TF) << "," << "distance_TF" << distance_TF;
+                        armor_light.test_ID = oss.str();
+                        /////////
+
                         // 计算每对灯条的装甲板
                         set_light(armor_light);
 
@@ -448,48 +418,40 @@ int main(){
                     }
                 }
 
-                // 装甲板清理步骤，将所有共线装甲板清楚
-                for(size_t i = 0; i+2 < armor.size(); ++i){
-
-                    lightbors& first = armor[i];
-                    lightbors& second = armor[i+1];
-                    lightbors& third = armor[i+2];
-
-                    cv::Point2f& first_position = first.right_lightbors.center;
-                    cv::Point2f& second_left_position = second.left_lightbors.center;
-                    cv::Point2f& second_right_position = second.right_lightbors.center;
-                    cv::Point2f& third_position = third.left_lightbors.center;
-                    
-                    if(first_position == second_left_position && second_right_position == third_position){
-                        armor.erase(armor.begin() + (i+1));
-                    }else{continue;}
-                // }
-
-                // // 此处为字符识别部分，为了降低算力，采用自研的识别算法
-                // for(auto& cnt_string : armor){
-                //     cv::Mat ROI;
-                //     CropAndResize(cnt_string, endImage, ROI);
-
-                //     std::vector<std::vector<cv::Point>> contours;
-                //     cv::findContours(ROI, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-                //     distinguish(cnt_string, contours);
-                // }
+                // 此处为字符识别部分，为了降低算力，采用自研的识别算法
+                for(auto& cnt_string : armor){
+                    FeatureDetector8Classes detector;
+                    cv::Mat ROI;
+                    CropAndResize(cnt_string, matImage, ROI);
+                    cnt_string.ID = detector.detect(ROI, cnt_string);
+                }
 
                 // 将疑似装甲板全部绘制出来       并配上识别字符
                 for(auto& cnt : armor){
-                    
+
+                    // if(cnt.righting){
+                        //  cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
+                        for (int i = 0; i < 4; i++)
+                        {
+                            cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
+                        }
+                        cv::putText(matImage, cnt.test_ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255,0,0), 3);
+                    // }
+
                     // if(cnt.righting){
                     //     cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
                     // }
-                    for (int i = 0; i < 4; i++)
-                    {
-                        cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
-                    }
+
+                    // cv::putText(matImage, cnt.test_ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255,0,0), 3);
+                    // for (int i = 0; i < 4; i++)
+                    // {
+                    //     cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
+                    // }
                 }
             }
 
             imshow("Tracking", matImage);
-            imshow("tae", mask);
+            // imshow("tae", grayImage);
 
             waitKey(5);
 

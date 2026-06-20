@@ -8,12 +8,29 @@ add_rules("mode.debug", "mode.release")
 
 target("test_cxx")
     set_kind("binary")
-    add_files("src/*.cpp")
+    add_files("src/main.cpp")
     add_packages("opencv")
+    set_rundir("$(projectdir)")
 
     
 
 add_links("MVSDK")
+
+-- set_project("test_cxx")
+-- set_version("1.0.0")
+-- set_languages("c++11")
+-- set_optimize("fastest")
+-- add_requires("opencv 4.x", {configs = {shared = true}})
+
+-- add_rules("mode.debug", "mode.release")
+
+-- target("test_cxx")
+--     set_rundir("$(projectdir)")
+--     set_kind("binary")
+--     add_files("src/test.cpp")
+--     add_packages("opencv")
+
+    
 --
 -- If you want to known more usage about xmake, please see https://xmake.io
 --
