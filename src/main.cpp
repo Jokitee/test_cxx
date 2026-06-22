@@ -10,8 +10,6 @@
 #include <map>
 #include <string>
 
-using namespace cv;
-
 unsigned char           * g_pRgbBuffer;
 
 struct lightbors
@@ -56,7 +54,7 @@ cv::RotatedRect stretchLongSide(const cv::RotatedRect& rect, float scale) {
 }
 
 // 角点交换函数
-void points_exchange(Point2f points[4]) {
+void points_exchange(cv::Point2f points[4]) {
     std::vector<Point2f> pts(points, points + 4);
     
     // Step 1: 按 y 坐标升序排序（y 小在上，y 大在下）
@@ -301,7 +299,7 @@ int main(){
 
     CameraPlay(hCamera);
     CameraSetAeState(hCamera, false);
-    setStatues = CameraSetExposureTime(hCamera, 3000);
+    setStatues = CameraSetExposureTime(hCamera, 5000);
     CameraSetGain(hCamera, 100, 70, 50);
     printf("statue = %d\n", setStatues);
 
@@ -429,31 +427,20 @@ int main(){
                 // 将疑似装甲板全部绘制出来       并配上识别字符
                 for(auto& cnt : armor){
 
-                    // if(cnt.righting){
-                        //  cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
+                    if(cnt.righting){
+                        cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
                         for (int i = 0; i < 4; i++)
                         {
                             cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
                         }
-                        cv::putText(matImage, cnt.test_ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255,0,0), 3);
-                    // }
-
-                    // if(cnt.righting){
-                    //     cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
-                    // }
-
-                    // cv::putText(matImage, cnt.test_ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255,0,0), 3);
-                    // for (int i = 0; i < 4; i++)
-                    // {
-                    //     cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
-                    // }
+                    }
                 }
             }
 
             imshow("Tracking", matImage);
             // imshow("tae", grayImage);
 
-            waitKey(5);
+            cv::waitKey(5);
 
             CameraReleaseImageBuffer(hCamera, pbyBuffer);
         }
