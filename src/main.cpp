@@ -624,7 +624,8 @@ int main(){
             armor.clear();
             if(end_rects.size() >= 2){
                 // 灯条配对逻辑
-                float angle_TF, first_max, second_max, getheight, getlight, distance_TF;
+                lightbors armor_light;
+                float angle_TF, first_max, second_max, getheight, getlight, distance_TF, height_TF;
                 for(size_t i = 0; i < end_rects.size()-1; i++){
                     for(size_t j = i + 1; j < end_rects.size(); j++){
  
@@ -641,13 +642,13 @@ int main(){
                         getheight = sqrt(pow(end_rects[i].center.x - end_rects[j].center.x, 2)+pow(end_rects[i].center.y - end_rects[j].center.y, 2));
                         getlight = (first_max + second_max) / 2;
                         distance_TF = getheight / getlight;
+                        height_TF = first_max / second_max;
                         if (distance_TF > 3.0 || distance_TF < 2.3)continue;
+                        if (height_TF > 1.5 || height_TF < 0.5)continue;
 
                         /*
                         *****   灯条归位并定点    *****
                         */
-                        lightbors armor_light;
-
                         if(end_rects[i].center.x < end_rects[j].center.x){
                             armor_light.left_lightbors = end_rects[i];
                             armor_light.right_lightbors = end_rects[j];
@@ -655,6 +656,7 @@ int main(){
                             armor_light.left_lightbors = end_rects[j];
                             armor_light.right_lightbors = end_rects[i];
                         }
+
 
                         /* 测试 */
                         /////////
@@ -704,7 +706,6 @@ int main(){
                 
                 // 将疑似装甲板全部绘制出来       并配上识别字符
                 for(auto& cnt : armor){
-
                     if(cnt.righting){
 
                         ////////////////  测试
