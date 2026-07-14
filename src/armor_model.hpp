@@ -14,6 +14,7 @@ using Vec3 = Eigen::Vector3d;
 using Mat3 = Eigen::Matrix3d;
 using Mat4 = Eigen::Matrix4d;
 using Pose = Eigen::Isometry3d;
+using Vector6d = Eigen::Matrix<double, 6, 1>;
 
 // ==================== 基础几何定义 ====================
 
@@ -184,8 +185,8 @@ private:
     );
     
     // 位姿参数化 <-> 李代数
-    static Pose paramsToPose(const Eigen::Vector6d& xi);
-    static Eigen::Vector6d poseToParams(const Pose& T);
+    static Pose paramsToPose(const Vector6d& xi);      
+    static Vector6d poseToParams(const Pose& T);      
 };
 
 // ==================== 可视化 ====================

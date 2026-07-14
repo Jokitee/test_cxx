@@ -185,11 +185,8 @@ double Camera::reprojectionError(
 ModelOptimizer::ModelOptimizer(const Camera& cam, const VehicleModel& model_init)
     : cam_(cam), model_(model_init) {}
 
-Pose ModelOptimizer::paramsToPose(const Eigen::Vector6d& xi) {
-    // 李代数se(3) -> SE(3)
+Pose ModelOptimizer::paramsToPose(const Vector6d& xi) {
     Pose T = Pose::Identity();
-    
-    // 旋转：前3维为旋转向量
     Eigen::Vector3d omega = xi.head<3>();
     double theta = omega.norm();
     
@@ -206,13 +203,11 @@ Pose ModelOptimizer::paramsToPose(const Eigen::Vector6d& xi) {
     return T;
 }
 
-Eigen::Vector6d ModelOptimizer::poseToParams(const Pose& T) {
-    Eigen::Vector6d xi;
-    
+Vector6d ModelOptimizer::poseToParams(const Pose& T) {
+    Vector6d xi;
     Eigen::AngleAxisd aa(T.rotation());
     xi.head<3>() = aa.angle() * aa.axis();
     xi.tail<3>() = T.translation();
-    
     return xi;
 }
 
@@ -248,7 +243,7 @@ void ModelOptimizer::computeResidualsAndJacobian(
         // 数值差分计算雅可比（简化版，可替换为解析导数）
         // 位姿扰动
         for (int j = 0; j < 6; ++j) {
-            Eigen::Vector6d xi = poseToParams(T_cam_obj);
+            Vector6d xi = poseToParams(T_cam_obj);
             xi(j) += eps;
             Pose T_perturb = paramsToPose(xi);
             
@@ -331,7 +326,7 @@ ModelOptimizer::OptimizationResult ModelOptimizer::optimizeSingleFrame(
     const double lambda_init = 0.01;
     double lambda = lambda_init;
     
-    Eigen::Vector6d xi = poseToParams(T_init);
+    Vector6d xi = poseToParams(T_init);
     double d = model_.getD();
     double h = model_.getH();
     double tilt = model_.getTilt();
@@ -372,7 +367,7 @@ ModelOptimizer::OptimizationResult ModelOptimizer::optimizeSingleFrame(
         Eigen::VectorXd delta = H.ldlt().solve(b);
         
         // 更新参数
-        Eigen::Vector6d xi_new = xi;
+        Vector6d xi_new = xi;
         double d_new = d, h_new = h, tilt_new = tilt;
         
         for (int i = 0; i < var_dim; ++i) {

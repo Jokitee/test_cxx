@@ -3,13 +3,15 @@ set_version("1.0.0")
 set_languages("c++11")
 set_optimize("fastest")
 add_requires("opencv 4.x", {configs = {shared = true}})
+add_requires("eigen")
 
 add_rules("mode.debug", "mode.release")
 
 target("test_cxx")
     set_kind("binary")
-    add_files("src/main.cpp")
-    add_packages("opencv")
+    add_files("src/main.cpp", "src/armor_model.cpp")
+    add_includedirs("src")
+    add_packages("opencv", "eigen")
     set_rundir("$(projectdir)")
 
     
