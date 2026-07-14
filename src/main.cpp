@@ -19,7 +19,7 @@ struct lightbors
     cv::RotatedRect left_armor;
     cv::RotatedRect right_armor;
     cv::Point2f armor_center;
-    cv::Point2f armor_point[4];     // 次序为 左上 -> 右上 -> 右下 -> 左下
+    cv::Point2f armor_point[4];     // 次序为 左上 -> 右上 -> 右下 -> 左下  基于Opencv右正下正的坐标系
     std::string ID;         // 装甲板数字
     bool righting = 0;
 
@@ -55,11 +55,11 @@ cv::RotatedRect stretchLongSide(const cv::RotatedRect& rect, float scale) {
 
 // 角点交换函数
 void points_exchange(cv::Point2f points[4]) {
-    std::vector<Point2f> pts(points, points + 4);
+    std::vector<cv::Point2f> pts(points, points + 4);
     
     // Step 1: 按 y 坐标升序排序（y 小在上，y 大在下）
     // y 相同则按 x 排序（x 小在左）
-    std::sort(pts.begin(), pts.end(), [](const Point2f& a, const Point2f& b) {
+    std::sort(pts.begin(), pts.end(), [](const cv::Point2f& a, const cv::Point2f& b) {
         if (std::abs(a.y - b.y) > 1e-5) {
             return a.y < b.y;  // y 小的排在前面（上方）
         }
@@ -67,13 +67,13 @@ void points_exchange(cv::Point2f points[4]) {
     });
     
     // Step 2: 分组 —— 上方两点（y 较小）和下方两点（y 较大）
-    Point2f top1 = pts[0];   // y 最小
-    Point2f top2 = pts[1];   // y 次小
-    Point2f bottom1 = pts[2]; // y 次大
-    Point2f bottom2 = pts[3]; // y 最大
+    cv::Point2f top1 = pts[0];   // y 最小
+    cv::Point2f top2 = pts[1];   // y 次小
+    cv::Point2f bottom1 = pts[2]; // y 次大
+    cv::Point2f bottom2 = pts[3]; // y 最大
     
     // Step 3: 上方两点按 x 排序，确定左上和右上
-    Point2f top_left, top_right;
+    cv::Point2f top_left, top_right;
     if (top1.x < top2.x) {
         top_left  = top1;   // x 小 → 左上
         top_right = top2;   // x 大 → 右上
@@ -83,7 +83,7 @@ void points_exchange(cv::Point2f points[4]) {
     }
     
     // Step 4: 下方两点按 x 排序，确定左下和右下
-    Point2f bottom_left, bottom_right;
+    cv::Point2f bottom_left, bottom_right;
     if (bottom1.x < bottom2.x) {
         bottom_left  = bottom1;  // x 小 → 左下
         bottom_right = bottom2;  // x 大 → 右下
@@ -105,8 +105,8 @@ void set_light(lightbors& armor_light){
     armor_light.left_lightbors = stretchLongSide(armor_light.left_lightbors, 2.4f);
     armor_light.right_lightbors = stretchLongSide(armor_light.right_lightbors, 2.4f);
     // 获取角点并放进数组内部
-    Point2f left_points[4];
-    Point2f right_points[4];
+    cv::Point2f left_points[4];
+    cv::Point2f right_points[4];
     armor_light.left_lightbors.points(left_points);
     armor_light.right_lightbors.points(right_points);
     points_exchange(left_points);
@@ -259,6 +259,205 @@ public:
     }
 };
 
+// Pnp解算类
+class PoseEstimator {
+public:
+    // ========== 构造函数 ==========
+
+    // 空构造，之后手动设置参数
+    PoseEstimator() = default;
+
+    // 从 YAML 文件加载内参和畸变
+    explicit PoseEstimator(const std::string& yamlPath) {
+        loadCameraYAML(yamlPath);
+    }
+
+    // ========== 公有接口 ==========
+
+    // 从 YAML 加载相机内参和畸变系数
+    bool loadCameraYAML(const std::string& path) {
+        cv::FileStorage fs(path, cv::FileStorage::READ);
+        if (!fs.isOpened()) {
+            std::cerr << "无法打开 " << path << std::endl;
+            return false;
+        }
+        fs["camera_matrix"]            >> K_;
+        fs["distortion_coefficients"]  >> dist_;
+        fs["image_width"]              >> width_;
+        fs["image_height"]             >> height_;
+        fs.release();
+
+        if (K_.rows != 3 || K_.cols != 3 || dist_.cols != 5) {
+            std::cerr << "参数尺寸错误" << std::endl;
+            return false;
+        }
+        intrinsicsLoaded_ = true;
+        return true;
+    }
+
+    // 设置相机在世界坐标系下的外参
+    void setWorldPose(const cv::Mat& R_wc, const cv::Mat& t_wc) {
+        CV_Assert(R_wc.type() == CV_64F && R_wc.rows == 3 && R_wc.cols == 3);
+        CV_Assert(t_wc.type() == CV_64F);
+        R_wc_ = R_wc.clone();
+        t_wc_ = t_wc.clone();
+        extrinsicsSet_ = true;
+    }
+
+    // 核心：估计物体在世界坐标系下的位姿
+    //   objPts  - 物体坐标系下的三维点 (N×3)
+    //   imgPts  - 对应的图像二维点 (N×2)
+    //   q_wo    - 输出四元数 (x, y, z, w)
+    //   t_wo    - 输出平移向量 (3×1)
+    bool estimatePose(cv::InputArray objPts,
+                      cv::InputArray imgPts,
+                      cv::Vec4d&    q_wo,
+                      cv::Mat&      t_wo,
+                      cv::Mat&      R_wo) const
+    {
+        if (!intrinsicsLoaded_ || !extrinsicsSet_) {
+            std::cerr << "请先加载内参并设置外参" << std::endl;
+            return false;
+        }
+
+        // 1) solvePnP → 相机系下的物体位姿
+        cv::Mat rvec_co, tvec_co;
+        bool ok = cv::solvePnP(objPts, imgPts, K_, dist_,
+                               rvec_co, tvec_co,
+                               false, cv::SOLVEPNP_IPPE);
+        if (!ok) return false;
+
+        // 2) 旋转向量 → 旋转矩阵
+        cv::Mat R_co;
+        cv::Rodrigues(rvec_co, R_co);
+
+        // 3) 相机系 → 世界系
+        R_wo = R_wc_ * R_co;
+        t_wo = t_wc_ + R_wc_ * tvec_co;
+
+        // 4) 旋转矩阵 → 四元数
+        q_wo = rotMatToQuat(R_wo);
+        return true;
+    }
+
+    // ========== 静态工具函数 ==========
+
+    // 旋转矩阵 → 四元数 (x, y, z, w)
+    static cv::Vec4d rotMatToQuat(const cv::Mat& R) {
+        CV_Assert(R.type() == CV_64F && R.rows == 3 && R.cols == 3);
+
+        double m00 = R.at<double>(0,0), m01 = R.at<double>(0,1), m02 = R.at<double>(0,2);
+        double m10 = R.at<double>(1,0), m11 = R.at<double>(1,1), m12 = R.at<double>(1,2);
+        double m20 = R.at<double>(2,0), m21 = R.at<double>(2,1), m22 = R.at<double>(2,2);
+
+        double tr = m00 + m11 + m22;
+        double qx, qy, qz, qw;
+
+        if (tr > 0) {
+            double s = std::sqrt(tr + 1.0) * 2;
+            qw = 0.25 * s;
+            qx = (m21 - m12) / s;
+            qy = (m02 - m20) / s;
+            qz = (m10 - m01) / s;
+        } else if (m00 > m11 && m00 > m22) {
+            double s = std::sqrt(1.0 + m00 - m11 - m22) * 2;
+            qw = (m21 - m12) / s;
+            qx = 0.25 * s;
+            qy = (m01 + m10) / s;
+            qz = (m02 + m20) / s;
+        } else if (m11 > m22) {
+            double s = std::sqrt(1.0 + m11 - m00 - m22) * 2;
+            qw = (m02 - m20) / s;
+            qx = (m01 + m10) / s;
+            qy = 0.25 * s;
+            qz = (m12 + m21) / s;
+        } else {
+            double s = std::sqrt(1.0 + m22 - m00 - m11) * 2;
+            qw = (m10 - m01) / s;
+            qx = (m02 + m20) / s;
+            qy = (m12 + m21) / s;
+            qz = 0.25 * s;
+        }
+        return cv::Vec4d(qx, qy, qz, qw);
+    }
+
+    // ========== Getter ==========
+    const cv::Mat& cameraMatrix()    const { return K_; }
+    const cv::Mat& distCoeffs()      const { return dist_; }
+    const cv::Mat& worldRotation()   const { return R_wc_; }
+    const cv::Mat& worldTranslation()const { return t_wc_; }
+    int imageWidth()                 const { return width_; }
+    int imageHeight()                const { return height_; }
+
+private:
+    // 内参
+    cv::Mat K_;
+    cv::Mat dist_;
+    int     width_  = 0;
+    int     height_ = 0;
+
+    // 外参（相机在世界系的位姿）
+    cv::Mat R_wc_;
+    cv::Mat t_wc_;
+
+    // 状态标志
+    bool intrinsicsLoaded_ = false;
+    bool extrinsicsSet_    = false;
+};
+
+// 画三维立体框
+void drawCube(
+    cv::Mat& image,
+    const cv::Mat& R_wo,
+    const cv::Mat& t_wo,
+    const cv::Mat& K,
+    const cv::Mat& dist)
+{
+    // 静态缓存，避免重复分配
+    static std::vector<cv::Point3f> cube3d;
+    std::vector<cv::Point3f> pts_cam;
+    std::vector<cv::Point2f> pts2d;
+    
+    if (cube3d.empty()) {
+        float h = 125.0f, w = 135.0f, l = 30.0f;
+        cube3d = {
+        {-w/2,-h/2,0}, {w/2,-h/2,0}, {w/2,h/2,0}, {-w/2,h/2,0},
+        {-w/2,-h/2,l}, {w/2,-h/2,l}, {w/2,h/2,l}, {-w/2,h/2,l}
+        };
+    }
+    
+    pts_cam.resize(8);
+    pts2d.resize(8);
+    
+    // 使用原始指针/数组，避免 cv::Mat 堆分配
+    const double* R = R_wo.ptr<double>();
+    const double* t = t_wo.ptr<double>();
+    
+    for (int i = 0; i < 8; ++i) {
+        const auto& p = cube3d[i];
+        double x = R[0]*p.x + R[1]*p.y + R[2]*p.z + t[0];
+        double y = R[3]*p.x + R[4]*p.y + R[5]*p.z + t[1];
+        double z = R[6]*p.x + R[7]*p.y + R[8]*p.z + t[2];
+        pts_cam[i] = cv::Point3f(static_cast<float>(x),
+                                  static_cast<float>(y),
+                                  static_cast<float>(z));
+    }
+    
+    cv::projectPoints(pts_cam, cv::Vec3d::zeros(), cv::Vec3d::zeros(),
+                      K, dist, pts2d);
+
+    // 画 12 条边
+    int edges[][2] = {
+        {0,1},{1,2},{2,3},{3,0},   // 底面
+        {4,5},{5,6},{6,7},{7,4},   // 顶面
+        {0,4},{1,5},{2,6},{3,7}    // 竖边
+    };
+    for (auto& e : edges) {
+        cv::line(image, pts2d[e[0]], pts2d[e[1]],
+                 cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+    }
+}
+
 int main(){
     int iCameraCounts = 1;
     int iStatues = -1;
@@ -311,6 +510,23 @@ int main(){
         CameraSetIspOutFormat(hCamera, CAMERA_MEDIA_TYPE_BGR8);
     }
 
+    ///////////////     Pnp解算验证
+    PoseEstimator estimator("asset/camera_calibration.yml");
+    // 2 设置相机在世界系的外参（目前设定为世界坐标系和相机坐标系一致）
+    cv::Mat R_wc = cv::Mat::eye(3, 3, CV_64F);
+    cv::Mat t_wc = cv::Mat::zeros(3, 1, CV_64F);
+
+    estimator.setWorldPose(R_wc, t_wc);
+    float height = 125.0f; // 物体边长
+    float width = 135.0f; //
+    std::vector<cv::Point3f> objPts = {
+        {-width/2, -height/2, 0}, 
+        {width/2, -height/2, 0},
+        {width/2,  height/2, 0},
+        {-width/2,  height/2, 0},
+    };
+    ///////////////
+
     while(iDisplatFrames){
 
         if(CameraGetImageBuffer(hCamera, &sFrameInfo, &pbyBuffer, 1000) == CAMERA_STATUS_SUCCESS){
@@ -357,17 +573,18 @@ int main(){
 
                 end_rects.push_back(rotRect);
 
-                cv::Point2f pts[4];
-                rotRect.points(pts);
-                for (int i = 0; i < 4; i++)
-                {
-                    cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
-                }
+                // cv::Point2f pts[4];
+                // rotRect.points(pts);
+                // for (int i = 0; i < 4; i++)
+                // {
+                //     cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
+                // }
             }
 
             armor.clear();
             if(end_rects.size() >= 2){
                 // 灯条配对逻辑
+                float angle_TF, first_max, second_max, getheight, getlight, distance_TF;
                 for(size_t i = 0; i < end_rects.size()-1; i++){
                     for(size_t j = i + 1; j < end_rects.size(); j++){
  
@@ -375,15 +592,15 @@ int main(){
                         *****    灯条匹配逻辑      ******
                         */
                         // 倾斜角度偏差检测
-                        float angle_TF = getright_angle(end_rects[i]) - getright_angle(end_rects[j]);
+                        angle_TF = getright_angle(end_rects[i]) - getright_angle(end_rects[j]);
                         if (fabs(angle_TF) > 6.5)continue;
                         
                         // 灯条距离与灯条长度比值检测
-                        float first_max = std::max(end_rects[i].size.width, end_rects[i].size.height);
-                        float second_max = std::max(end_rects[j].size.width, end_rects[j].size.height);
-                        float getheight = sqrt(pow(end_rects[i].center.x - end_rects[j].center.x, 2)+pow(end_rects[i].center.y - end_rects[j].center.y, 2));
-                        float getlight = (first_max + second_max) / 2;
-                        float distance_TF = getheight / getlight;
+                        first_max = std::max(end_rects[i].size.width, end_rects[i].size.height);
+                        second_max = std::max(end_rects[j].size.width, end_rects[j].size.height);
+                        getheight = sqrt(pow(end_rects[i].center.x - end_rects[j].center.x, 2)+pow(end_rects[i].center.y - end_rects[j].center.y, 2));
+                        getlight = (first_max + second_max) / 2;
+                        distance_TF = getheight / getlight;
                         if (distance_TF > 3.0 || distance_TF < 2.3)continue;
 
                         /*
@@ -416,6 +633,26 @@ int main(){
                     }
                 }
 
+                const auto& cameraMatrix = estimator.cameraMatrix();
+                const auto& distCoeffs = estimator.distCoeffs();
+                std::vector<cv::Point2f>imgPts;
+                cv::Mat R_wo, t_wo;
+                cv::Vec4d   q_wo;
+                imgPts.reserve(4);  // 预分配内存
+                // for(auto& pnppose : armor){
+                //     if (pnppose.armor_point == nullptr) continue;
+                //     std::vector<cv::Point2f> imgPts = {
+                //     pnppose.armor_point[0], pnppose.armor_point[1],
+                //     pnppose.armor_point[2], pnppose.armor_point[3]
+                //     };
+                //     if (estimator.estimatePose(objPts, imgPts, q_wo, t_wo, R_wo)) {
+                //         drawCube(matImage, R_wo, t_wo,
+                //                 cameraMatrix,
+                //                 distCoeffs);
+                //     }else{continue;}
+                // }
+
+                
                 // 此处为字符识别部分，为了降低算力，采用自研的识别算法
                 for(auto& cnt_string : armor){
                     FeatureDetector8Classes detector;
@@ -424,15 +661,29 @@ int main(){
                     cnt_string.ID = detector.detect(ROI, cnt_string);
                 }
 
+                
                 // 将疑似装甲板全部绘制出来       并配上识别字符
                 for(auto& cnt : armor){
 
                     if(cnt.righting){
+
+                        ////////////////  测试
+                        std::vector<cv::Point2f> imgPts = {
+                        cnt.armor_point[0], cnt.armor_point[1],
+                        cnt.armor_point[2], cnt.armor_point[3]
+                        };
+                        if (estimator.estimatePose(objPts, imgPts, q_wo, t_wo, R_wo)) {
+                            drawCube(matImage, R_wo, t_wo,
+                                    cameraMatrix,
+                                    distCoeffs);
+                        }else{continue;}
+                        ////////////////  测试
+
                         cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
-                        for (int i = 0; i < 4; i++)
-                        {
-                            cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
-                        }
+                        // for (int i = 0; i < 4; i++)
+                        // {
+                        //     cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
+                        // }
                     }
                 }
             }

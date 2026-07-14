@@ -51,7 +51,7 @@ bool estimateObjectPoseWorld(
 ) {
     cv::Mat rvec_co, tvec_co;
     bool ok = cv::solvePnP(objPts, imgPts, K, distCoeffs,
-                           rvec_co, tvec_co, false, cv::SOLVEPNP_EPNP);
+                           rvec_co, tvec_co, false, cv::SOLVEPNP_IPPE);
     if (!ok) return false;
 
     cv::Mat R_co;
