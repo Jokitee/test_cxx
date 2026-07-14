@@ -613,12 +613,12 @@ int main(){
 
                 end_rects.push_back(rotRect);
 
-                // cv::Point2f pts[4];
-                // rotRect.points(pts);
-                // for (int i = 0; i < 4; i++)
-                // {
-                //     cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
-                // }
+                cv::Point2f pts[4];
+                rotRect.points(pts);
+                for (int i = 0; i < 4; i++)
+                {
+                    cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
+                }
             }
 
             armor.clear();
@@ -694,7 +694,7 @@ int main(){
                 //     }else{continue;}
                 // }
 
-                
+                /*
                 // 此处为字符识别部分，采用新集成的 ONNX 识别算法
                 for(auto& cnt_string : armor){
                     // FeatureDetector8Classes detector;  // 淘汰的 SVM 算法
@@ -727,6 +727,7 @@ int main(){
                         // }
                     }
                 }
+                */
             }
 
             imshow("Tracking", matImage);
