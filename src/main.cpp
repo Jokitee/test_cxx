@@ -2,6 +2,7 @@
 #include "CameraApi.h"
 #include "opencv2/core.hpp"
 #include "opencv2/opencv.hpp"
+#include "opencv2/dnn.hpp"
 #include "opencv2/highgui/highgui.hpp"
 #include <stdio.h>
 #include <vector>
@@ -125,67 +126,35 @@ void set_light(lightbors& armor_light){
 
 }
 
-// 获取待检测的ROI
+// 获取待检测的ROI (已修改为适配 ONNX 训练集的直接矩形裁切方案)
 void CropAndResize(const lightbors& armor_light, cv::Mat& endB, cv::Mat& outImage) {
+    // 在前面的 set_light 函数中，灯条长度已经被 stretchLongSide 拉长了 2.4 倍。
+    // 这与 auto_aim 源码中 (上下各自延伸 1.125) 非常接近。
+    // 因此我们直接用这4个延展后的角点计算包围盒 Bounding Box。
     
-    int dst_w = 64;
-    int dst_h = 64;
+    float min_x = std::min({armor_light.armor_point[0].x, armor_light.armor_point[1].x, armor_light.armor_point[2].x, armor_light.armor_point[3].x});
+    float max_x = std::max({armor_light.armor_point[0].x, armor_light.armor_point[1].x, armor_light.armor_point[2].x, armor_light.armor_point[3].x});
+    float min_y = std::min({armor_light.armor_point[0].y, armor_light.armor_point[1].y, armor_light.armor_point[2].y, armor_light.armor_point[3].y});
+    float max_y = std::max({armor_light.armor_point[0].y, armor_light.armor_point[1].y, armor_light.armor_point[2].y, armor_light.armor_point[3].y});
 
-    // armor_point[0~3] 四个角点（假设顺序：左上、右上、右下、左下，顺时针或逆时针均可）
-    cv::Point2f srcPts[4] = {
-        armor_light.armor_point[0],
-        armor_light.armor_point[1],
-        armor_light.armor_point[2],
-        armor_light.armor_point[3]
-    };
+    // 边界安全校验，防止截取越界
+    int roi_left = std::max(static_cast<int>(min_x), 0);
+    int roi_top = std::max(static_cast<int>(min_y), 0);
+    int roi_right = std::min(static_cast<int>(max_x), endB.cols);
+    int roi_bottom = std::min(static_cast<int>(max_y), endB.rows);
 
-    // ========== 计算各边中点 ==========
-    // 上边中点（0和1之间）
-    cv::Point2f mid_top    = (srcPts[0] + srcPts[1]) * 0.5f;
-    // 下边中点（3和2之间）  
-    cv::Point2f mid_bottom = (srcPts[3] + srcPts[2]) * 0.5f;
-    // 左边中点（0和3之间）
-    cv::Point2f mid_left   = (srcPts[0] + srcPts[3]) * 0.5f;
-    // 右边中点（1和2之间）
-    cv::Point2f mid_right  = (srcPts[1] + srcPts[2]) * 0.5f;
+    cv::Rect roi(roi_left, roi_top, roi_right - roi_left, roi_bottom - roi_top);
 
-    // ========== 构建新的四个角点（截取中间一半长度）==========
-    // 
-    // 原理：以竖直方向（左右边中点连线）为基准
-    // 上边从中心往两边各取一半（即原长的1/4处）
-    // 这样新上边长度 = 原上边长度 / 2
-    //
-    // 新左上 = 上边中点 + (原左上 - 上边中点) * 0.5
-    //       = 上边中点往左上方向走一半距离
-    cv::Point2f new_top_left  = mid_top + (srcPts[0] - mid_top) * 0.5f;
-    cv::Point2f new_top_right = mid_top + (srcPts[1] - mid_top) * 0.5f;
-    
-    // 下边同理
-    cv::Point2f new_bottom_right = mid_bottom + (srcPts[2] - mid_bottom) * 0.5f;
-    cv::Point2f new_bottom_left  = mid_bottom + (srcPts[3] - mid_bottom) * 0.5f;
-
-    // 源四边形（截取后的区域）
-    cv::Point2f srcQuad[4] = {
-        new_top_left,      // 新左上
-        new_top_right,     // 新右上
-        new_bottom_right,  // 新右下
-        new_bottom_left    // 新左下
-    };
-
-    // 目标矩形（正放，64x64）
-    cv::Point2f dstQuad[4] = {
-        cv::Point2f(0, 0),              // 左上
-        cv::Point2f(dst_w - 1, 0),     // 右上
-        cv::Point2f(dst_w - 1, dst_h - 1), // 右下
-        cv::Point2f(0, dst_h - 1)      // 左下
-    };
-
-    // ========== 透视变换 ==========
-    cv::Mat transform = cv::getPerspectiveTransform(srcQuad, dstQuad);
-    cv::warpPerspective(endB, outImage, transform, cv::Size(dst_w, dst_h));
+    // 进行裁切
+    if (roi.area() > 0) {
+        outImage = endB(roi).clone();
+    } else {
+        outImage = cv::Mat();
+    }
 }
 
-// 自研分类算法
+// 自研分类算法 (原 SVM 模型 - 已注释化)
+/*
 class FeatureDetector8Classes {
 private:
     cv::Ptr<cv::ml::SVM> svm;
@@ -216,11 +185,6 @@ public:
         }
     }
  
-    /**
-     * 检测特征并返回特征名称
-     * @param inputImg 输入的局部特征图像 (BGR格式)
-     * @return 返回特征名称，失败返回 "unknown"
-     */
     std::string detect(const cv::Mat& inputImg, lightbors& armor_light) {
         if (inputImg.empty()) return "unknown";
  
@@ -254,6 +218,81 @@ public:
             armor_light.righting = 1;
             return class_names[predicted_label];
         }
+        armor_light.righting = 0;
+        return "unknown";
+    }
+};
+*/
+
+// 新的 ONNX 分类模型算法
+class FeatureDetectorONNX {
+private:
+    cv::dnn::Net net_;
+    // 对应 auto_aim 中 9 个分类：0-one, 1-two, 2-three, 3-four, 4-five, 5-sentry, 6-outpost, 7-base, 8-not_armor
+    std::vector<std::string> class_names = {"1", "2", "3", "4", "5", "sentry", "outpost", "base", "not_armor"};
+    
+public:
+    FeatureDetectorONNX() {
+        try {
+            // 加载 ONNX 模型
+            net_ = cv::dnn::readNetFromONNX("asset/tiny_resnet.onnx");
+            if (net_.empty()) {
+                std::cerr << "ONNX 模型加载失败" << std::endl;
+            }
+        } catch (const cv::Exception& e) {
+            std::cerr << "ONNX 模型加载异常: " << e.what() << std::endl;
+        }
+    }
+
+    std::string detect(const cv::Mat& inputImg, lightbors& armor_light) {
+        if (inputImg.empty()) return "unknown";
+
+        // 1. 转灰度图
+        cv::Mat gray;
+        if (inputImg.channels() == 3) {
+            cv::cvtColor(inputImg, gray, cv::COLOR_BGR2GRAY);
+        } else {
+            gray = inputImg.clone();
+        }
+
+        // 2. 构建 32x32 的全黑底图，进行等比例缩放
+        cv::Mat input = cv::Mat(32, 32, CV_8UC1, cv::Scalar(0));
+        double scale = std::min(32.0 / gray.cols, 32.0 / gray.rows);
+        int h = static_cast<int>(gray.rows * scale);
+        int w = static_cast<int>(gray.cols * scale);
+        
+        if (h == 0 || w == 0) {
+            armor_light.righting = 0;
+            return "unknown";
+        }
+        
+        cv::Rect roi(0, 0, w, h);
+        cv::resize(gray, input(roi), cv::Size(w, h));
+
+        // 3. 构建 Blob 并送入网络 (归一化 1.0/255.0)
+        cv::Mat blob = cv::dnn::blobFromImage(input, 1.0 / 255.0, cv::Size(), cv::Scalar());
+        net_.setInput(blob);
+        cv::Mat outputs = net_.forward();
+
+        // 4. 后处理 (Softmax)
+        float max_val = *std::max_element(outputs.begin<float>(), outputs.end<float>());
+        cv::exp(outputs - max_val, outputs);
+        float sum = cv::sum(outputs)[0];
+        outputs /= sum;
+
+        // 5. 提取置信度与类别 ID
+        double confidence;
+        cv::Point label_point;
+        cv::minMaxLoc(outputs.reshape(1, 1), nullptr, &confidence, nullptr, &label_point);
+        int label_id = label_point.x;
+
+        // 设置阈值并映射名称
+        // 阈值设为 0.5，且不采用 8(not_armor)
+        if (confidence > 0.5 && label_id >= 0 && label_id < 8) {
+            armor_light.righting = 1;
+            return class_names[label_id];
+        }
+
         armor_light.righting = 0;
         return "unknown";
     }
@@ -473,6 +512,7 @@ int main(){
 
     /////////////////////////////////////////////////////////
     std::vector<lightbors> armor;
+    FeatureDetectorONNX onnx_detector; // 在循环外部实例化一次，防止每帧重复加载模型
     /////////////////////////////////////////////////////////
 
     CameraSdkInit(1);
@@ -653,12 +693,12 @@ int main(){
                 // }
 
                 
-                // 此处为字符识别部分，为了降低算力，采用自研的识别算法
+                // 此处为字符识别部分，采用新集成的 ONNX 识别算法
                 for(auto& cnt_string : armor){
-                    FeatureDetector8Classes detector;
+                    // FeatureDetector8Classes detector;  // 淘汰的 SVM 算法
                     cv::Mat ROI;
                     CropAndResize(cnt_string, matImage, ROI);
-                    cnt_string.ID = detector.detect(ROI, cnt_string);
+                    cnt_string.ID = onnx_detector.detect(ROI, cnt_string);
                 }
 
                 
