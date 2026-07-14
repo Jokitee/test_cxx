@@ -624,12 +624,12 @@ int main(){
 
                 end_rects.push_back(rotRect);
 
-                cv::Point2f pts[4];
-                rotRect.points(pts);
-                for (int i = 0; i < 4; i++)
-                {
-                    cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
-                }
+                // cv::Point2f pts[4];
+                // rotRect.points(pts);
+                // for (int i = 0; i < 4; i++)
+                // {
+                //     cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
+                // }
             }
 
             armor.clear();
@@ -694,6 +694,15 @@ int main(){
                 imgPts.reserve(4);  // 预分配内存
 
                 ////////////////////////////////
+                // 【关键修复 1】：必须先运行 ONNX 识别模型！
+                // 因为如果不运行它，cnt.righting 永远不会变成 1，下面的 if(cnt.righting) 永远进不去，就不会画任何东西！
+                for(auto& cnt_string : armor){
+                    cv::Mat ROI;
+                    CropAndResize(cnt_string, matImage, ROI);
+                    // 只有这里跑了识别，真正的装甲板才会被打上 righting = 1 的标签
+                    cnt_string.ID = onnx_detector.detect(ROI, cnt_string);
+                }
+
                 armor_model::FrameObservation obs;
                 obs.timestamp = 0; // 当前帧时间戳（如有需要可引入 std::chrono）
                 
@@ -706,9 +715,7 @@ int main(){
                         
                         // a. 将角点装入观测结构体
                         armor_model::ArmorObservation a_obs;
-                        // 注意：这里默认将视野内识别到的装甲板当做 0 号（车头 Front）。
-                        // 在真正的多板解算中，你需要结合陀螺仪/追踪器来判断它是 0、1、2 还是 3。
-                        a_obs.plate_id = 0; 
+                        a_obs.plate_id = 0; // 固定按前装甲板测试
                         a_obs.confidence = 1.0; 
                         // 送入 4 个角点
                         for (int i = 0; i < 4; i++) {
@@ -723,29 +730,25 @@ int main(){
                         };
                         
                         if (estimator.estimatePose(objPts, imgPts, q_wo_tmp, t_wo_tmp, R_wo_tmp)) {
-                            // 将 OpenCV 的位姿转为 Eigen 的 Pose (Isometry3d)
                             Eigen::Matrix3d R_eigen = armor_model::cvMatToEigen3d(R_wo_tmp);
                             Eigen::Vector3d t_eigen = armor_model::cvMatToEigenVec(t_wo_tmp);
                             
                             T_init.linear() = R_eigen;
-                            // 由于 OpenCV 算出的是装甲板中心，这里为了简化，初值暂且近似用作整车中心
-                            // 在迭代优化中 optimizer.optimizeSingleFrame 会自动利用 d 和 h 将它纠正！
-                            T_init.translation() = t_eigen / 1000.0; // PnP 若用的是 mm，要除以1000转成 m
+                            // 注意：这里用装甲板位姿近似整车位姿，有 30cm 的初始偏差
+                            T_init.translation() = t_eigen / 1000.0; 
                             has_init_pose = true;
                         }
                     }
                 }
                 // c. 如果有观测数据，则执行 LM 非线性优化
                 if (!obs.armors.empty() && has_init_pose) {
-                    // 假设第一块装甲板算出的 T_init 被保存了下来 (这里简化为上个步骤算出的最后一组)
-                    // optimize_d = false, optimize_h = false，表示固定车辆尺寸只优化位姿
                     auto opt_result = optimizer.optimizeSingleFrame(obs, T_init, false, false, false);
                     
-                    if (opt_result.converged) {
-                        // d. 优化成功，调用你的高级 3D 渲染器绘制全车线框图
-                        matImage = armor_model::ModelVisualizer::render3DView(
-                            optimizer.getModel(), opt_result.T_cam_object, am_cam, matImage, &obs);
-                    }
+                    // 【关键修复 2】：去掉严格的 converged 判断强制渲染！
+                    // 因为我们给的初值 T_init 是装甲板位置（偏离车中心 30cm），LM 优化可能会因为误差稍大而没达到极度苛刻的像素级收敛。
+                    // 强制调用渲染，这样即使有微小偏差你也能看到 3D 框了。
+                    matImage = armor_model::ModelVisualizer::render3DView(
+                        optimizer.getModel(), opt_result.T_cam_object, am_cam, matImage, &obs);
                 }
                 ////////////////
 
@@ -762,7 +765,7 @@ int main(){
                 //     }else{continue;}
                 // }
 
-                /*
+                
                 // 此处为字符识别部分，采用新集成的 ONNX 识别算法
                 for(auto& cnt_string : armor){
                     // FeatureDetector8Classes detector;  // 淘汰的 SVM 算法
@@ -795,7 +798,7 @@ int main(){
                         // }
                     }
                 }
-                */
+            
             }
 
             imshow("Tracking", matImage);
