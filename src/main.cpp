@@ -1,5 +1,6 @@
 #include <iostream>
 #include "CameraApi.h"
+#include "armor_model.h"
 #include "opencv2/core.hpp"
 #include "opencv2/opencv.hpp"
 #include "opencv2/dnn.hpp"
@@ -556,6 +557,16 @@ int main(){
     cv::Mat R_wc = cv::Mat::eye(3, 3, CV_64F);
     cv::Mat t_wc = cv::Mat::zeros(3, 1, CV_64F);
 
+    //////////////////
+    const auto& K = estimator.cameraMatrix();
+    const auto& dist = estimator.distCoeffs();
+    armor_model::Camera am_cam(K, dist, 1280, 720); // 这里的 1280,720 请替换为你相机的真实分辨率
+
+     // 假设半宽 d=0.3m(300mm), 距地高度 h=0.15m(150mm), 装甲板倾角 15 度
+    armor_model::VehicleModel am_model(0.300, 0.150, 15.0); 
+    armor_model::ModelOptimizer optimizer(am_cam, am_model);
+    //////////////////
+    
     estimator.setWorldPose(R_wc, t_wc);
     float height = 125.0f; // 物体边长
     float width = 135.0f; //
@@ -681,6 +692,63 @@ int main(){
                 cv::Mat R_wo, t_wo;
                 cv::Vec4d   q_wo;
                 imgPts.reserve(4);  // 预分配内存
+
+                ////////////////////////////////
+                armor_model::FrameObservation obs;
+                obs.timestamp = 0; // 当前帧时间戳（如有需要可引入 std::chrono）
+                
+                // 【修复】将 T_init 和有效标志位提到了 for 循环外面，否则会报作用域错误
+                armor_model::Pose T_init = armor_model::Pose::Identity();
+                bool has_init_pose = false; 
+                
+                for(auto& cnt : armor){
+                    if(cnt.righting){ // righting == 1 表示模型识别到了有效数字（不是 unknown）
+                        
+                        // a. 将角点装入观测结构体
+                        armor_model::ArmorObservation a_obs;
+                        // 注意：这里默认将视野内识别到的装甲板当做 0 号（车头 Front）。
+                        // 在真正的多板解算中，你需要结合陀螺仪/追踪器来判断它是 0、1、2 还是 3。
+                        a_obs.plate_id = 0; 
+                        a_obs.confidence = 1.0; 
+                        // 送入 4 个角点
+                        for (int i = 0; i < 4; i++) {
+                            a_obs.corners_img[i] = cnt.armor_point[i];
+                        }
+                        obs.armors.push_back(a_obs);
+                        // b. 借用老 PnP 提供一个基础初值 (T_init)
+                        cv::Vec4d q_wo_tmp; cv::Mat t_wo_tmp, R_wo_tmp;
+                        std::vector<cv::Point2f> imgPts = {
+                            cnt.armor_point[0], cnt.armor_point[1],
+                            cnt.armor_point[2], cnt.armor_point[3]
+                        };
+                        
+                        if (estimator.estimatePose(objPts, imgPts, q_wo_tmp, t_wo_tmp, R_wo_tmp)) {
+                            // 将 OpenCV 的位姿转为 Eigen 的 Pose (Isometry3d)
+                            Eigen::Matrix3d R_eigen = armor_model::cvMatToEigen3d(R_wo_tmp);
+                            Eigen::Vector3d t_eigen = armor_model::cvMatToEigenVec(t_wo_tmp);
+                            
+                            T_init.linear() = R_eigen;
+                            // 由于 OpenCV 算出的是装甲板中心，这里为了简化，初值暂且近似用作整车中心
+                            // 在迭代优化中 optimizer.optimizeSingleFrame 会自动利用 d 和 h 将它纠正！
+                            T_init.translation() = t_eigen / 1000.0; // PnP 若用的是 mm，要除以1000转成 m
+                            has_init_pose = true;
+                        }
+                    }
+                }
+                // c. 如果有观测数据，则执行 LM 非线性优化
+                if (!obs.armors.empty() && has_init_pose) {
+                    // 假设第一块装甲板算出的 T_init 被保存了下来 (这里简化为上个步骤算出的最后一组)
+                    // optimize_d = false, optimize_h = false，表示固定车辆尺寸只优化位姿
+                    auto opt_result = optimizer.optimizeSingleFrame(obs, T_init, false, false, false);
+                    
+                    if (opt_result.converged) {
+                        // d. 优化成功，调用你的高级 3D 渲染器绘制全车线框图
+                        matImage = armor_model::ModelVisualizer::render3DView(
+                            optimizer.getModel(), opt_result.T_cam_object, am_cam, matImage, &obs);
+                    }
+                }
+                ////////////////
+
                 // for(auto& pnppose : armor){
                 //     if (pnppose.armor_point == nullptr) continue;
                 //     std::vector<cv::Point2f> imgPts = {
