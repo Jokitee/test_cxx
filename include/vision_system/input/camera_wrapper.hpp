@@ -4,6 +4,8 @@
 #include "vision_system/core/config_manager.hpp"
 #include <opencv2/opencv.hpp>
 #include <mutex>
+#include <thread>
+#include <chrono>
 
 class MVCamera {
 public:
