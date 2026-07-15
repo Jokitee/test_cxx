@@ -1,5 +1,10 @@
+/**
+ * @brief 车辆模型优化与LM非线性位姿解算
+ * @author jokit
+ * @date 2026-07-15
+ */
 // armor_model.cpp
-#include "armor_model.hpp"
+#include "vision_system/decision/armor_model.hpp"
 #include <cmath>
 #include <iostream>
 

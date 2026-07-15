@@ -9,8 +9,13 @@ add_rules("mode.debug", "mode.release")
 
 target("test_cxx")
     set_kind("binary")
-    add_files("src/main.cpp", "src/armor_model.cpp")
-    add_includedirs("src")
+    add_files("src/main.cpp", 
+              "src/core/*.cpp",
+              "src/input/*.cpp",
+              "src/decision/*.cpp", 
+              "src/processing/*.cpp", 
+              "src/output/*.cpp")
+    add_includedirs("include", "src")
     add_packages("opencv", "eigen")
     set_rundir("$(projectdir)")
 

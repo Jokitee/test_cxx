@@ -1,0 +1,34 @@
+%YAML:1.0
+Camera:
+  mode: "video"                 # "camera" (真实相机) 或 "video" (视频测试)
+  video_path: "demo/test.mp4"   # 当 mode 为 "video" 时生效
+  exposure_time: 5000
+  gain_r: 100
+  gain_g: 70
+  gain_b: 50
+
+Modules:
+  enable_detector: 1     # 1=开启灯条检测
+  enable_classifier: 1   # 1=开启神经网络数字识别 (若为0则默认全部视为 "1" 号)
+  enable_pnp: 1          # 1=开启 3D 位姿解算与模型优化
+  enable_serial: 0       # 1=开启串口发包
+
+Serial:
+  port_name: "COM3"
+  baud_rate: 115200
+
+Detector:
+  thresh_val: 150
+  area_min: 50.0
+  area_max: 9000.0
+  ratio_min: 4.0
+  ratio_max: 15.0
+  angle_min: 5.0
+  angle_max: 175.0
+  distance_min: 2.3
+  distance_max: 3.0
+
+UI:
+  show_window: 1       # 1=显示窗口, 0=关闭窗口(无头模式运行)
+  draw_3d_box: 1       # 1=绘制车辆 3D 优化边框
+  draw_2d_id: 1        # 1=绘制装甲板 2D 识别数字
