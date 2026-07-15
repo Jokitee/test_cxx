@@ -31,7 +31,7 @@ public:
     bool is_tracking = false;
     
     armor_model::FrameObservation latest_obs;
-    armor_model::OptimizationResult latest_opt_result;
+    armor_model::ModelOptimizer::OptimizationResult latest_opt_result;
 
     // EKF 状态估计器
     vision_system::ExtendedKalmanFilter ekf;
