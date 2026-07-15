@@ -44,7 +44,7 @@ std::vector<lightbors> ArmorDetector::detect(const cv::Mat& matImage) {
         for (size_t i = 0; i < end_rects.size() - 1; i++) {
             for (size_t j = i + 1; j < end_rects.size(); j++) {
                 float angle_TF = getright_angle(end_rects[i]) - getright_angle(end_rects[j]);
-                if (std::fabs(angle_TF) > 6.5) continue;
+                if (std::fabs(angle_TF) > 8.5) continue;
                 
                 float first_max = std::max(end_rects[i].size.width, end_rects[i].size.height);
                 float second_max = std::max(end_rects[j].size.width, end_rects[j].size.height);
