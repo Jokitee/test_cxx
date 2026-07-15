@@ -29,6 +29,60 @@ struct lightbors
     std::string test_ID;
 };
 
+// 车辆装甲板类：将同一车辆检测到的装甲板聚合在一起
+class VehicleArmors {
+public:
+    std::string vehicle_id;          // 车辆装甲板数字/名称（如 "1", "2" 等）
+    std::vector<lightbors> plates;   // 属于该车辆的装甲板集合
+
+    VehicleArmors() = default;
+    explicit VehicleArmors(const std::string& id) : vehicle_id(id) {}
+
+    // 录入装甲板
+    void addPlate(const lightbors& armor) {
+        if (armor.ID == vehicle_id || vehicle_id.empty()) {
+            if (vehicle_id.empty()) vehicle_id = armor.ID;
+            plates.push_back(armor);
+        }
+    }
+
+    // 根据 armor_model 的命名规则生成观测数据，匹配装甲板的 plate_id
+    armor_model::FrameObservation getObservation(int64_t timestamp = 0) const {
+        armor_model::FrameObservation obs;
+        obs.timestamp = timestamp;
+
+        // 根据装甲板在图像中的 x 坐标从左到右排序
+        std::vector<lightbors> sorted_plates = plates;
+        std::sort(sorted_plates.begin(), sorted_plates.end(), [](const lightbors& a, const lightbors& b) {
+            return a.armor_center.x < b.armor_center.x;
+        });
+
+        for (size_t i = 0; i < sorted_plates.size(); ++i) {
+            armor_model::ArmorObservation a_obs;
+            
+            // 配合 armor_model 命名规则: 0:前 1:右 2:后 3:左
+            // 根据图像中的装甲板相对位置判断 ID 
+            if (sorted_plates.size() == 1) {
+                a_obs.plate_id = 0; // 视野中只有一个，默认作为前装甲板(0)
+            } else if (sorted_plates.size() == 2) {
+                // 如果有两个装甲板，假设看到的是车辆偏侧面
+                // 左侧的是左装甲板(3)，右侧的是前装甲板(0)
+                if (i == 0) a_obs.plate_id = 3; 
+                if (i == 1) a_obs.plate_id = 0; 
+            } else {
+                a_obs.plate_id = i % 4; // 兜底逻辑
+            }
+
+            a_obs.confidence = 1.0;
+            for (int j = 0; j < 4; j++) {
+                a_obs.corners_img[j] = sorted_plates[i].armor_point[j];
+            }
+            obs.armors.push_back(a_obs);
+        }
+        return obs;
+    }
+};
+
 // 角度矫正函数(针对于Opencv矩形拟合的狗屎算法)
 float getright_angle(const cv::RotatedRect& rect) {
     float angle = rect.angle;          // 总是 width 边的方向，∈[-90°, 0°]
@@ -703,52 +757,58 @@ int main(){
                     cnt_string.ID = onnx_detector.detect(ROI, cnt_string);
                 }
 
-                armor_model::FrameObservation obs;
-                obs.timestamp = 0; // 当前帧时间戳（如有需要可引入 std::chrono）
-                
-                // 【修复】将 T_init 和有效标志位提到了 for 循环外面，否则会报作用域错误
-                armor_model::Pose T_init = armor_model::Pose::Identity();
-                bool has_init_pose = false; 
-                
+                // 将识别到的有效装甲板按车辆 ID 分组
+                std::map<std::string, VehicleArmors> vehicles;
                 for(auto& cnt : armor){
                     if(cnt.righting){ // righting == 1 表示模型识别到了有效数字（不是 unknown）
-                        
-                        // a. 将角点装入观测结构体
-                        armor_model::ArmorObservation a_obs;
-                        a_obs.plate_id = 0; // 固定按前装甲板测试
-                        a_obs.confidence = 1.0; 
-                        // 送入 4 个角点
-                        for (int i = 0; i < 4; i++) {
-                            a_obs.corners_img[i] = cnt.armor_point[i];
-                        }
-                        obs.armors.push_back(a_obs);
-                        // b. 借用老 PnP 提供一个基础初值 (T_init)
-                        cv::Vec4d q_wo_tmp; cv::Mat t_wo_tmp, R_wo_tmp;
-                        std::vector<cv::Point2f> imgPts = {
-                            cnt.armor_point[0], cnt.armor_point[1],
-                            cnt.armor_point[2], cnt.armor_point[3]
-                        };
-                        
-                        if (estimator.estimatePose(objPts, imgPts, q_wo_tmp, t_wo_tmp, R_wo_tmp)) {
-                            Eigen::Matrix3d R_eigen = armor_model::cvMatToEigen3d(R_wo_tmp);
-                            Eigen::Vector3d t_eigen = armor_model::cvMatToEigenVec(t_wo_tmp);
-                            
-                            T_init.linear() = R_eigen;
-                            // 注意：这里用装甲板位姿近似整车位姿，有 30cm 的初始偏差
-                            T_init.translation() = t_eigen / 1000.0; 
-                            has_init_pose = true;
-                        }
+                        vehicles[cnt.ID].vehicle_id = cnt.ID;
+                        vehicles[cnt.ID].addPlate(cnt);
                     }
                 }
-                // c. 如果有观测数据，则执行 LM 非线性优化
-                if (!obs.armors.empty() && has_init_pose) {
-                    auto opt_result = optimizer.optimizeSingleFrame(obs, T_init, false, false, false);
+
+                // 对于每个车辆分别进行位姿解算和优化
+                for(auto& pair : vehicles){
+                    const auto& vehicle = pair.second;
+                    armor_model::FrameObservation obs = vehicle.getObservation(0);
                     
-                    // 【关键修复 2】：去掉严格的 converged 判断强制渲染！
-                    // 因为我们给的初值 T_init 是装甲板位置（偏离车中心 30cm），LM 优化可能会因为误差稍大而没达到极度苛刻的像素级收敛。
-                    // 强制调用渲染，这样即使有微小偏差你也能看到 3D 框了。
-                    matImage = armor_model::ModelVisualizer::render3DView(
-                        optimizer.getModel(), opt_result.T_cam_object, am_cam, matImage, &obs);
+                    armor_model::Pose T_init = armor_model::Pose::Identity();
+                    bool has_init_pose = false;
+
+                    // 借用老 PnP 提供一个基础初值 (T_init)
+                    // 为了初始位姿能更好收敛，用被判断为前装甲板(0号)或排在最后(最右边)的一块作初值计算
+                    lightbors init_plate = vehicle.plates[0];
+                    if (vehicle.plates.size() > 1) {
+                        for (const auto& p : vehicle.plates) {
+                            if (p.armor_center.x > init_plate.armor_center.x) {
+                                init_plate = p;
+                            }
+                        }
+                    }
+
+                    cv::Vec4d q_wo_tmp; cv::Mat t_wo_tmp, R_wo_tmp;
+                    std::vector<cv::Point2f> imgPts = {
+                        init_plate.armor_point[0], init_plate.armor_point[1],
+                        init_plate.armor_point[2], init_plate.armor_point[3]
+                    };
+                    
+                    if (estimator.estimatePose(objPts, imgPts, q_wo_tmp, t_wo_tmp, R_wo_tmp)) {
+                        Eigen::Matrix3d R_eigen = armor_model::cvMatToEigen3d(R_wo_tmp);
+                        Eigen::Vector3d t_eigen = armor_model::cvMatToEigenVec(t_wo_tmp);
+                        
+                        T_init.linear() = R_eigen;
+                        // 注意：这里用装甲板位姿近似整车位姿，有 30cm 的初始偏差
+                        T_init.translation() = t_eigen / 1000.0; 
+                        has_init_pose = true;
+                    }
+
+                    // 如果有观测数据，则执行 LM 非线性优化
+                    if (!obs.armors.empty() && has_init_pose) {
+                        auto opt_result = optimizer.optimizeSingleFrame(obs, T_init, false, false, false);
+                        
+                        // 去掉严格的 converged 判断强制渲染！
+                        matImage = armor_model::ModelVisualizer::render3DView(
+                            optimizer.getModel(), opt_result.T_cam_object, am_cam, matImage, &obs);
+                    }
                 }
                 ////////////////
 
