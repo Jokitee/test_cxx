@@ -678,12 +678,12 @@ int main(){
 
                 end_rects.push_back(rotRect);
 
-                // cv::Point2f pts[4];
-                // rotRect.points(pts);
-                // for (int i = 0; i < 4; i++)
-                // {
-                //     cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
-                // }
+                cv::Point2f pts[4];
+                rotRect.points(pts);
+                for (int i = 0; i < 4; i++)
+                {
+                    cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
+                }
             }
 
             armor.clear();
@@ -707,9 +707,7 @@ int main(){
                         getheight = sqrt(pow(end_rects[i].center.x - end_rects[j].center.x, 2)+pow(end_rects[i].center.y - end_rects[j].center.y, 2));
                         getlight = (first_max + second_max) / 2;
                         distance_TF = getheight / getlight;
-                        height_TF = first_max / second_max;
-                        if (distance_TF > 3.0 || distance_TF < 2.3)continue;
-                        if (height_TF > 1.5 || height_TF < 0.5)continue;
+                        if (distance_TF > 3.0 || distance_TF < 2.1)continue;
 
                         /*
                         *****   灯条归位并定点    *****
@@ -740,6 +738,7 @@ int main(){
                     }
                 }
 
+                /*
                 const auto& cameraMatrix = estimator.cameraMatrix();
                 const auto& distCoeffs = estimator.distCoeffs();
                 std::vector<cv::Point2f>imgPts;
@@ -811,6 +810,7 @@ int main(){
                     }
                 }
                 ////////////////
+                */
 
                 // for(auto& pnppose : armor){
                 //     if (pnppose.armor_point == nullptr) continue;
@@ -826,36 +826,36 @@ int main(){
                 // }
 
                 
-                // 此处为字符识别部分，采用新集成的 ONNX 识别算法
-                for(auto& cnt_string : armor){
-                    // FeatureDetector8Classes detector;  // 淘汰的 SVM 算法
-                    cv::Mat ROI;
-                    CropAndResize(cnt_string, matImage, ROI);
-                    cnt_string.ID = onnx_detector.detect(ROI, cnt_string);
-                }
+                // // 此处为字符识别部分，采用新集成的 ONNX 识别算法
+                // for(auto& cnt_string : armor){
+                //     // FeatureDetector8Classes detector;  // 淘汰的 SVM 算法
+                //     cv::Mat ROI;
+                //     CropAndResize(cnt_string, matImage, ROI);
+                //     cnt_string.ID = onnx_detector.detect(ROI, cnt_string);
+                // }
 
                 
                 // 将疑似装甲板全部绘制出来       并配上识别字符
                 for(auto& cnt : armor){
-                    if(cnt.righting){
+                    if(/*cnt.righting*/1){
 
                         ////////////////  测试
-                        std::vector<cv::Point2f> imgPts = {
-                        cnt.armor_point[0], cnt.armor_point[1],
-                        cnt.armor_point[2], cnt.armor_point[3]
-                        };
-                        if (estimator.estimatePose(objPts, imgPts, q_wo, t_wo, R_wo)) {
-                            drawCube(matImage, R_wo, t_wo,
-                                    cameraMatrix,
-                                    distCoeffs);
-                        }else{continue;}
-                        ////////////////  测试
+                        // std::vector<cv::Point2f> imgPts = {
+                        // cnt.armor_point[0], cnt.armor_point[1],
+                        // cnt.armor_point[2], cnt.armor_point[3]
+                        // };
+                        // if (estimator.estimatePose(objPts, imgPts, q_wo, t_wo, R_wo)) {
+                        //     drawCube(matImage, R_wo, t_wo,
+                        //             cameraMatrix,
+                        //             distCoeffs);
+                        // }else{continue;}
+                        // ////////////////  测试
 
-                        cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
-                        // for (int i = 0; i < 4; i++)
-                        // {
-                        //     cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
-                        // }
+                        // cv::putText(matImage, cnt.ID, cnt.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
+                        for (int i = 0; i < 4; i++)
+                        {
+                            cv::line(matImage, cnt.armor_point[i], cnt.armor_point[(i+1)%4], cv::Scalar(0,0,254), 2);
+                        }
                     }
                 }
             
