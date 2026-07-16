@@ -209,9 +209,14 @@ void Pipeline::processLoop() {
             }
         }
 
-        // 5. 渲染基础 2D 文本 ID 标签
+        // 5. 渲染基础 2D 文本 ID 标签与装甲板 2D 边框
         if (config_.getUIConfig().draw_2d_id) {
             for (auto& a : armors) {
+                // 画出所有画面中检测配对成功的 armor
+                for (int i = 0; i < 4; i++) {
+                    cv::line(current_frame.image, a.armor_point[i], a.armor_point[(i + 1) % 4], cv::Scalar(0, 255, 0), 2);
+                }
+                
                 if (a.righting) {
                     cv::putText(current_frame.image, a.ID, a.armor_point[0], cv::FONT_HERSHEY_SIMPLEX, 3.0, cv::Scalar(255,0,0), 3);
                 }
