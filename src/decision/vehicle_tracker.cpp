@@ -120,6 +120,11 @@ void VehicleTracker::predict(int64_t t) {
         return x_prior;
     };
 
+    // 防止转速 vyaw 爆炸导致模型疯狂旋转 (限制最大转速约为 4 rad/s)
+    if (std::abs(ekf_.x(7)) > 4.0) {
+        ekf_.x(7) = (ekf_.x(7) > 0) ? 4.0 : -4.0;
+    }
+
     ekf_.predict(F, Q, f);
 }
 
