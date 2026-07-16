@@ -18,6 +18,8 @@ public:
     
     // ypd_in_cam: [yaw, pitch, distance] 极坐标系的观测
     // face_yaw: 观测到的单块装甲板自身在相机系里的偏航角
+    int matchArmor(const Eigen::Vector3d& ypd_in_cam, double face_yaw) const;
+    
     void update(int plate_id, const Eigen::Vector3d& ypd_in_cam, double face_yaw);
 
     Eigen::VectorXd getEKFState() const { return ekf_.getState(); }

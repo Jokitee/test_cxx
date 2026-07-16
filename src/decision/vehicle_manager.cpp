@@ -142,7 +142,14 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
                 double face_yaw = euler(0); // 取决于旋转系定义，暂取简单的提取
                 
                 Eigen::Vector3d ypd_in_cam(yaw, pitch, dist);
-                tracker->update(obs.plate_id, ypd_in_cam, face_yaw);
+                
+                // 使用基于角度的匹配来防止 Target ID Switch，而不是用旧的 2D 检测框匹配 ID
+                int best_id = tracker->matchArmor(ypd_in_cam, face_yaw);
+                
+                // 根据推断出的真实 ID 修正观测
+                const_cast<armor_model::ArmorObservation&>(obs).plate_id = best_id;
+                
+                tracker->update(best_id, ypd_in_cam, face_yaw);
             }
         }
         
@@ -162,6 +169,7 @@ void VehicleManager::update(const std::vector<lightbors>& armors, int64_t timest
     // 1. 将检测到的有效装甲板按车辆 ID 分发
     for (const auto& armor : armors) {
         if (!armor.righting) continue;
+        if (armor.ID == "unknown" || armor.ID == "unknow") continue;
         
         std::string id = armor.ID;
         // 如果车辆实体尚不存在，则在管理器中进行实例化注册

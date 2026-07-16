@@ -152,6 +152,27 @@ Eigen::MatrixXd VehicleTracker::getArmorJacobian(const Eigen::VectorXd& x, int i
     return H_armor_ypda * H_armor_xyza;
 }
 
+int VehicleTracker::matchArmor(const Eigen::Vector3d& ypd_in_cam, double face_yaw) const {
+    int best_id = 0;
+    double min_error = 1e9;
+    
+    for (int id = 0; id < armor_num_; ++id) {
+        Eigen::Vector3d xyz = getArmorXYZ(ekf_.x, id);
+        Eigen::Vector3d ypd_pred = xyz2ypd(xyz);
+        double face_yaw_pred = limit_rad(ekf_.x(6) + id * 2.0 * CV_PI / armor_num_);
+        
+        // 角度误差 = 位置的偏航角误差 + 装甲板自身朝向角误差
+        double error = std::abs(limit_rad(ypd_in_cam[0] - ypd_pred[0])) + 
+                       std::abs(limit_rad(face_yaw - face_yaw_pred));
+                       
+        if (error < min_error) {
+            min_error = error;
+            best_id = id;
+        }
+    }
+    return best_id;
+}
+
 void VehicleTracker::update(int plate_id, const Eigen::Vector3d& ypd_in_cam, double face_yaw) {
     Eigen::MatrixXd H = getArmorJacobian(ekf_.x, plate_id);
     
