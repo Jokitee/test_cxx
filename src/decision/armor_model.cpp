@@ -27,10 +27,10 @@ void ArmorPlate::updateGeometry() {
     // 装甲板中心在物体坐标系的位置
     // 前(0,d,h), 右(d,0,h), 后(0,-d,h), 左(-d,0,h)
     switch (id) {
-        case 0: center_object = Vec3(0, d, h);   break;  // 前
-        case 1: center_object = Vec3(d, 0, h);   break;  // 右
-        case 2: center_object = Vec3(0, -d, h);  break;  // 后
-        case 3: center_object = Vec3(-d, 0, h);  break;  // 左
+        case 0: center_object = Vec3(-d,  0, h); break;  // 前
+        case 1: center_object = Vec3( 0, -d, h); break;  // 右
+        case 2: center_object = Vec3( d,  0, h); break;  // 后
+        case 3: center_object = Vec3( 0,  d, h); break;  // 左
     }
     
     Vec3 to_center = -center_object;
