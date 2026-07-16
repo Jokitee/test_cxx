@@ -47,16 +47,25 @@ VehicleTracker::VehicleTracker(const armor_model::ArmorObservation& init_obs, in
     : t_(t) {
     
     Eigen::Vector3d xyz_cam = T_init.translation();
-    // 映射到伪世界坐标系 (X为正前方, Y为左方, Z为上方)
-    // 使得旋转平面位于 X-Y 平面，完美适配原版 EKF 的物理建模
+    
+    // 映射到伪世界坐标系
     double cx = xyz_cam.z();
     double cy = -xyz_cam.x();
     double cz = -xyz_cam.y();
     
-    // 初始化 11D 状态 [x, vx, y, vy, z, vz, yaw, vyaw, r, l, h]
+    // 获取初始装甲板的 yaw
+    Eigen::Vector3d N_cam = T_init.linear().col(2);
+    Eigen::Vector3d N_world(N_cam.z(), -N_cam.x(), -N_cam.y());
+    double face_yaw = std::atan2(N_world.y(), N_world.x());
+    
     // 假设初始半径 0.25, dz=0.1
+    double r = 0.25;
+    cx += r * std::cos(face_yaw);
+    cy += r * std::sin(face_yaw);
+    
+    // 初始化 11D 状态 [x, vx, y, vy, z, vz, yaw, vyaw, r, l, h]
     Eigen::VectorXd x0(11);
-    x0 << cx, 0.0, cy, 0.0, cz, 0.0, 0.0, 0.0, 0.25, 0.0, 0.1;
+    x0 << cx, 0.0, cy, 0.0, cz, 0.0, face_yaw, 0.0, r, 0.0, 0.1;
     
     Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(11, 11) * 1.0;
     
@@ -158,23 +167,30 @@ Eigen::MatrixXd VehicleTracker::getArmorJacobian(const Eigen::VectorXd& x, int i
 }
 
 int VehicleTracker::matchArmor(const Eigen::Vector3d& t_cam_armor, const Eigen::Matrix3d& R_cam_armor) const {
-    // 将相机的位姿转为伪世界坐标系下的 YPD 和 Face Yaw
     Eigen::Vector3d t_world_armor(t_cam_armor.z(), -t_cam_armor.x(), -t_cam_armor.y());
     Eigen::Vector3d ypd_in_world = xyz2ypd(t_world_armor);
     
-    // 假设装甲板在自身的局部坐标系中法向为 (0, 0, -1) [因为PnP是平面的Z=0,顺时针或逆时针定义]
-    // 提取在相机坐标系下的法向量
-    Eigen::Vector3d N_cam = -R_cam_armor.col(2);
-    // 转换到伪世界坐标系
+    // 提取在相机坐标系下的法向量 (指向车体内部，使得正面装甲板的yaw在世界系为0)
+    Eigen::Vector3d N_cam = R_cam_armor.col(2);
     Eigen::Vector3d N_world(N_cam.z(), -N_cam.x(), -N_cam.y());
     double face_yaw = std::atan2(N_world.y(), N_world.x());
     
+    // 获取四个预测装甲板的状态，并按距离(ypd[2])排序，只取最近的 3 个，剔除背面的装甲板
+    std::vector<std::pair<int, Eigen::Vector3d>> predicted_armors;
+    for (int id = 0; id < armor_num_; ++id) {
+        predicted_armors.push_back({id, xyz2ypd(getArmorXYZ(ekf_.x, id))});
+    }
+    std::sort(predicted_armors.begin(), predicted_armors.end(),
+              [](const std::pair<int, Eigen::Vector3d>& a, const std::pair<int, Eigen::Vector3d>& b) {
+                  return a.second[2] < b.second[2];
+              });
+              
     int best_id = 0;
     double min_error = 1e9;
     
-    for (int id = 0; id < armor_num_; ++id) {
-        Eigen::Vector3d xyz = getArmorXYZ(ekf_.x, id);
-        Eigen::Vector3d ypd_pred = xyz2ypd(xyz);
+    for (int i = 0; i < 3 && i < armor_num_; ++i) {
+        int id = predicted_armors[i].first;
+        Eigen::Vector3d ypd_pred = predicted_armors[i].second;
         double face_yaw_pred = limit_rad(ekf_.x(6) + id * 2.0 * CV_PI / armor_num_);
         
         // 角度误差 = 位置的偏航角误差 + 装甲板自身朝向角误差
@@ -196,7 +212,8 @@ void VehicleTracker::update(int plate_id, const Eigen::Vector3d& t_cam_armor, co
     Eigen::Vector3d t_world_armor(t_cam_armor.z(), -t_cam_armor.x(), -t_cam_armor.y());
     Eigen::Vector3d ypd_in_world = xyz2ypd(t_world_armor);
     
-    Eigen::Vector3d N_cam = -R_cam_armor.col(2);
+    // 保持和 matchArmor 一致，使用指向车体内部的法向量
+    Eigen::Vector3d N_cam = R_cam_armor.col(2);
     Eigen::Vector3d N_world(N_cam.z(), -N_cam.x(), -N_cam.y());
     double face_yaw = std::atan2(N_world.y(), N_world.x());
     
