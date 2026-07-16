@@ -8,7 +8,8 @@
 VehicleNode::VehicleNode(const std::string& id, const armor_model::Camera& cam) 
     : vehicle_id(id), 
       // 每个车辆都有自己专属的模型优化器，初始模型假设 300mm 宽、150mm 高、倾角 15 度
-      optimizer(cam, armor_model::VehicleModel(0.300, 0.150, 15.0)) 
+      optimizer(cam, armor_model::VehicleModel(0.300, 0.150, 15.0)),
+      cam_(cam) 
 {
 }
 
@@ -24,6 +25,50 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
     }
     
     latest_obs = armors_buffer.getObservation(timestamp);
+    
+    // 【核心新增逻辑】：利用车辆历史位姿进行装甲板 ID 的数据关联
+    if (is_tracking && ekf_initialized) {
+        armor_model::Pose T_prior = current_pose; 
+        
+        // 提取 3D 模型里四个装甲板的数据
+        const auto& plates = optimizer.getModel().getPlates();
+        std::vector<std::pair<int, cv::Point2f>> projected_plates;
+        
+        for (const auto& plate : plates) {
+            // 计算法向量在相机坐标系下的方向
+            armor_model::Vec3 normal_cam = T_prior.linear() * plate.normal_object;
+            // 判断可见性：装甲板的法向量朝向相机 (在相机坐标系下，Z轴朝前，如果法向量Z分量为负，说明朝向相机)
+            if (normal_cam.z() < 0) {
+                // 投影 3D 中心点到 2D
+                cv::Point2f pt2d = cam_.project(plate.center_object, T_prior);
+                projected_plates.push_back({plate.id, pt2d});
+            }
+        }
+        
+        // 修正当前观测的 plate_id
+        for (auto& obs_armor : latest_obs.armors) {
+            // 计算观测到的 2D 矩形中心点
+            cv::Point2f obs_center(0.f, 0.f);
+            for (int i = 0; i < 4; i++) {
+                obs_center += obs_armor.corners_img[i];
+            }
+            obs_center.x /= 4.f;
+            obs_center.y /= 4.f;
+            
+            // 在所有可见投影中找最近的一块
+            double min_dist = 1e9;
+            int best_id = obs_armor.plate_id; // 保底使用默认的排序 ID
+            for (const auto& proj : projected_plates) {
+                double dist = cv::norm(obs_center - proj.second);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    best_id = proj.first;
+                }
+            }
+            // 重新分配基于模型预测匹配出的 ID
+            obs_armor.plate_id = best_id;
+        }
+    }
     
     // 1. 获取 PnP 初始猜测值
     armor_model::Pose T_init = armor_model::Pose::Identity();

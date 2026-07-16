@@ -26,6 +26,7 @@ public:
     
     // 该车辆持有的独立模型与优化器实例，保留历史参数状态，实现模型迭代合理化
     armor_model::ModelOptimizer optimizer;
+    armor_model::Camera cam_; // 缓存相机参数，供 3D 到 2D 投影关联使用
     
     armor_model::Pose current_pose;
     bool is_tracking = false;
