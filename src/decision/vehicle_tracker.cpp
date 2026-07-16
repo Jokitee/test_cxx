@@ -276,7 +276,7 @@ armor_model::Pose VehicleTracker::getCurrentPose() const {
 }
 
 void VehicleTracker::updateVehicleModel(armor_model::VehicleModel& model) const {
-    model.updateParameters(ekf_.x(8) * 2.0, ekf_.x(10), 15.0); // r*2 = d
+    model.updateParameters(ekf_.x(8), ekf_.x(10), 15.0); // d = r
 }
 
 } // namespace vision_system
