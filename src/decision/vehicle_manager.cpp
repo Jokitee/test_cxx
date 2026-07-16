@@ -99,8 +99,8 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
             T_init.linear() = armor_model::cvMatToEigen3d(R_wo_tmp);
             T_init.translation() = armor_model::cvMatToEigenVec(t_wo_tmp);
             
-            // 补偿车体中心距离装甲板表面的偏移量 (假设 0.15m)
-            T_init.translation() += T_init.linear() * Eigen::Vector3d(0, 0, 0.15);
+            // EKF内部会根据半径r进行补偿，这里直接传入观测到的装甲板位姿
+            // T_init.translation() += T_init.linear() * Eigen::Vector3d(0, 0, 0.15);
             
             tracker.reset(new vision_system::VehicleTracker(init_obs, timestamp, T_init));
             tracker_initialized = true;

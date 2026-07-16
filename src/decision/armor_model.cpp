@@ -33,18 +33,24 @@ void ArmorPlate::updateGeometry() {
         case 3: center_object = Vec3(-d, 0, h);  break;  // 左
     }
     
-    // 法向量：指向中心（Z轴负方向倾斜15°）
-    // 水平分量指向中心，垂直分量向上（与Z轴夹角15°意味着板子向内倾斜）
     Vec3 to_center = -center_object;
     to_center.z() = 0;  // 只取水平分量
     to_center.normalize();
     
-    // 法向量：水平指向中心，同时有向上的Z分量（与Z轴夹角15°）
-    // 即法向量与Z轴夹角为 90° - 15° = 75°，或者说与XY平面夹角15°
+    // 法向量：指向外侧，水平分量背向中心，同时有向上的Z分量（与垂直方向夹角15°）
+    // 即法向量与水平面（XY平面）的夹角为 tilt_angle = 15°
+    // 这意味着法向的水平分量大小为 cos(15°)，垂直分量大小为 sin(15°)
+    // 注意到 to_center 是指向中心的，所以如果法向量要指向车外，必须取反
+    // 为了和之前的系统约定一致，如果原来的逻辑是把 normal 取作为 to_center 的方向...
+    // 但物理上，法向量应该指向外，也就是 -to_center。
+    // 我们查看后续坐标系建立：
+    // X_local = Vec3(-to_center.y(), to_center.x(), 0).normalized();
+    // Y_local = Z_local.cross(X_local).normalized();
+    // 假设 Z_local 是物理法向（向外）。则 Z_local 的水平分量应该是 -to_center
     normal_object = Vec3(
-        to_center.x() * std::sin(tilt_rad),
-        to_center.y() * std::sin(tilt_rad),
-        std::cos(tilt_rad)
+        -to_center.x() * std::cos(tilt_rad),
+        -to_center.y() * std::cos(tilt_rad),
+        std::sin(tilt_rad)
     );
     normal_object.normalize();
     
