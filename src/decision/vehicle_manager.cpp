@@ -6,11 +6,16 @@
 #include "vision_system/decision/vehicle_manager.hpp"
 
 VehicleNode::VehicleNode(const std::string& id, const armor_model::Camera& cam) 
-    : vehicle_id(id), 
-      // 每个车辆都有自己专属的模型优化器，初始模型假设 300mm 宽、150mm 高、倾角 15 度
-      optimizer(cam, armor_model::VehicleModel(0.300, 0.150, 15.0)),
-      cam_(cam) 
+    : vehicle_id(id), cam_(cam) 
 {
+}
+
+armor_model::VehicleModel VehicleNode::getVehicleModel() const {
+    armor_model::VehicleModel model(0.300, 0.150, 15.0);
+    if (tracker) {
+        tracker->updateVehicleModel(model);
+    }
+    return model;
 }
 
 void VehicleNode::addArmor(const lightbors& armor) {
@@ -27,11 +32,11 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
     latest_obs = armors_buffer.getObservation(timestamp);
     
     // 【核心新增逻辑】：利用车辆历史位姿进行装甲板 ID 的数据关联
-    if (is_tracking && ekf_initialized) {
-        armor_model::Pose T_prior = current_pose; 
+    if (is_tracking && tracker_initialized && tracker) {
+        armor_model::Pose T_prior = tracker->getCurrentPose(); 
         
         // 提取 3D 模型里四个装甲板的数据
-        const auto& plates = optimizer.getModel().getPlates();
+        const auto& plates = getVehicleModel().getPlates();
         std::vector<std::pair<int, cv::Point2f>> projected_plates;
         
         for (const auto& plate : plates) {
@@ -70,28 +75,19 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
         }
     }
     
-    // 1. 获取 PnP 初始猜测值
-    armor_model::Pose T_init = armor_model::Pose::Identity();
-    bool has_init_pose = false;
-
-    // 直接使用最新观测到的主装甲板提供初始 PnP 猜测
-    const armor_model::ArmorObservation& init_obs = latest_obs.armors[0];
-    
-    // 【核心修复】：直接从当前车辆模型中获取对应装甲板在“车辆世界坐标系(载车坐标系)”下的真实3D坐标
-    // 这样 solvePnP 算出来的直接是 T_cam_object（相机到车辆中心），而不是 T_cam_armor（相机到单块装甲板）！
-    const armor_model::ArmorPlate* plate_model = optimizer.getModel().getPlateById(init_obs.plate_id);
-    
-    if (plate_model != nullptr) {
+    // 如果尚未初始化 tracker，使用当前帧的主装甲板来初始化
+    if (!tracker_initialized) {
+        const armor_model::ArmorObservation& init_obs = latest_obs.armors[0];
+        
+        // 我们通过将装甲板放置在其自身的局部坐标系（Z=0），求解出一个大概的初始位姿
         std::vector<cv::Point3f> objPts(4);
-        for (int i = 0; i < 4; i++) {
-            // 注意：corners_object 单位为米
-            objPts[i] = cv::Point3f(
-                static_cast<float>(plate_model->corners_object[i].x()),
-                static_cast<float>(plate_model->corners_object[i].y()),
-                static_cast<float>(plate_model->corners_object[i].z())
-            );
-        }
-
+        double w = 0.135 / 2.0;
+        double h = 0.055 / 2.0;
+        objPts[0] = cv::Point3f(-w,  h, 0);
+        objPts[1] = cv::Point3f(-w, -h, 0);
+        objPts[2] = cv::Point3f( w, -h, 0);
+        objPts[3] = cv::Point3f( w,  h, 0);
+        
         std::vector<cv::Point2f> imgPts = {
             init_obs.corners_img[0], init_obs.corners_img[1],
             init_obs.corners_img[2], init_obs.corners_img[3]
@@ -99,76 +95,59 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
         
         cv::Vec4d q_wo_tmp; cv::Mat t_wo_tmp, R_wo_tmp;
         if (estimator.estimatePose(objPts, imgPts, q_wo_tmp, t_wo_tmp, R_wo_tmp)) {
-            Eigen::Matrix3d R_eigen = armor_model::cvMatToEigen3d(R_wo_tmp);
-            Eigen::Vector3d t_eigen = armor_model::cvMatToEigenVec(t_wo_tmp);
+            armor_model::Pose T_init = armor_model::Pose::Identity();
+            T_init.linear() = armor_model::cvMatToEigen3d(R_wo_tmp);
+            T_init.translation() = armor_model::cvMatToEigenVec(t_wo_tmp);
             
-            T_init.linear() = R_eigen;
-            // 因为 objPts 单位现在已经是米，solvePnP 返回的 t_eigen 自然也是米，直接赋值，无需 /1000
-            T_init.translation() = t_eigen; 
-            has_init_pose = true;
-        }
-    }
-
-    // 2. 将当前帧观测数据送入该车辆独立的 Optimizer 进行迭代优化 
-    // (模型参数会随着帧数增加被逐渐合理化)
-    if (has_init_pose) {
-        // 【核心控制】：只有当看到 2 块及以上的装甲板时，才能约束求解车辆结构参数 (d, h, tilt)
-        // 否则如果只有 1 块装甲板，这是一个欠定方程（8个已知数求9个未知数），只能拟合位姿
-        bool can_optimize_model = (latest_obs.armors.size() >= 2);
-        
-        latest_opt_result = optimizer.optimizeSingleFrame(
-            latest_obs, 
-            T_init, 
-            can_optimize_model, // optimize_d (车辆半径)
-            can_optimize_model, // optimize_h (装甲板高度差)
-            can_optimize_model  // optimize_tilt (装甲板倾角)
-        );
-        
-        current_pose = latest_opt_result.T_cam_object;
-        
-        // ----------------------------------------------------
-        // EKF 卡尔曼滤波与卡方检验 (实时补偿)
-        // ----------------------------------------------------
-        Eigen::Vector3d obs_pos = current_pose.translation();
-        Eigen::VectorXd z(3);
-        z << obs_pos.x(), obs_pos.y(), obs_pos.z();
-        
-        if (!ekf_initialized) {
-            Eigen::VectorXd x0 = Eigen::VectorXd::Zero(6);
-            x0.head(3) = z; // 初始位置
-            ekf.init(x0, timestamp);
-            last_timestamp = timestamp;
-            ekf_initialized = true;
+            // 补偿车体中心距离装甲板表面的偏移量 (假设 0.15m)
+            T_init.translation() += T_init.linear() * Eigen::Vector3d(0, 0, 0.15);
+            
+            tracker = std::make_unique<vision_system::VehicleTracker>(init_obs, timestamp, T_init);
+            tracker_initialized = true;
+            is_tracking = true;
         } else {
-            double dt = (timestamp - last_timestamp) / 1000.0; // 假设 timestamp 是毫秒
-            if (dt > 0.0) {
-                // 1. 预测
-                ekf.predict(dt);
+            is_tracking = false;
+        }
+    } else {
+        // 先进行预测
+        tracker->predict(timestamp);
+        
+        // 遍历所有关联好的装甲板进行观测更新
+        for (const auto& obs : latest_obs.armors) {
+            std::vector<cv::Point3f> objPts(4);
+            double w = 0.135 / 2.0;
+            double h = 0.055 / 2.0;
+            objPts[0] = cv::Point3f(-w,  h, 0);
+            objPts[1] = cv::Point3f(-w, -h, 0);
+            objPts[2] = cv::Point3f( w, -h, 0);
+            objPts[3] = cv::Point3f( w,  h, 0);
+            
+            std::vector<cv::Point2f> imgPts = {
+                obs.corners_img[0], obs.corners_img[1],
+                obs.corners_img[2], obs.corners_img[3]
+            };
+            
+            cv::Vec4d q_tmp; cv::Mat t_tmp, R_tmp;
+            if (estimator.estimatePose(objPts, imgPts, q_tmp, t_tmp, R_tmp)) {
+                Eigen::Vector3d t_cam_armor = armor_model::cvMatToEigenVec(t_tmp);
+                Eigen::Matrix3d R_cam_armor = armor_model::cvMatToEigen3d(R_tmp);
                 
-                // 2. 检验卡方值，比较预测与当前观测的偏差
-                double chi2 = ekf.update(z);
+                // 将 XYZ 转换为 YPD
+                double dist = t_cam_armor.norm();
+                double pitch = std::atan2(t_cam_armor.z(), std::sqrt(t_cam_armor.x()*t_cam_armor.x() + t_cam_armor.y()*t_cam_armor.y()));
+                double yaw = std::atan2(t_cam_armor.y(), t_cam_armor.x());
                 
-                // 3. 实时补偿逻辑：
-                // 如果突变过大 (卡方值爆炸，例如突然跳变超过 50)，可能是检测到了另一台车，或是严重干扰
-                if (chi2 > 50.0) {
-                    // 放弃跟踪，强制重置滤波器到当前位置
-                    Eigen::VectorXd x0 = Eigen::VectorXd::Zero(6);
-                    x0.head(3) = z;
-                    ekf.reset(x0);
-                } else {
-                    // 取 EKF 平滑和预测过后的最优估计结果作为真实的 3D 坐标
-                    Eigen::VectorXd x_opt = ekf.getState();
-                    current_pose.translation() = Eigen::Vector3d(x_opt(0), x_opt(1), x_opt(2));
-                }
+                // 提取装甲板自身的法向朝向，由于我们在 OpenCV 坐标系，需要提取 Y 轴欧拉角
+                Eigen::Vector3d euler = R_cam_armor.eulerAngles(1, 0, 2); 
+                double face_yaw = euler(0); // 取决于旋转系定义，暂取简单的提取
+                
+                Eigen::Vector3d ypd_in_cam(yaw, pitch, dist);
+                tracker->update(obs.plate_id, ypd_in_cam, face_yaw);
             }
-            last_timestamp = timestamp;
         }
         
+        current_pose = tracker->getCurrentPose();
         is_tracking = true;
-    } else {
-        is_tracking = false;
-        // 长时间丢失后可重置 EKF
-        ekf_initialized = false; 
     }
     
     // 3. 清理当前帧缓存，准备接收下一帧的消息订阅

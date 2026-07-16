@@ -6,9 +6,11 @@
 #include "vision_system/decision/armor_model.hpp"
 #include "vision_system/decision/pnp_estimator.hpp"
 #include "vision_system/decision/ekf.hpp"
+#include "vision_system/decision/vehicle_tracker.hpp"
 #include <map>
 #include <string>
 #include <vector>
+#include <memory>
 
 // 代表战场上单个车辆实体的状态节点
 class VehicleNode {
@@ -24,20 +26,22 @@ public:
     std::string vehicle_id;
     VehicleArmors armors_buffer;
     
-    // 该车辆持有的独立模型与优化器实例，保留历史参数状态，实现模型迭代合理化
-    armor_model::ModelOptimizer optimizer;
-    armor_model::Camera cam_; // 缓存相机参数，供 3D 到 2D 投影关联使用
+    // 缓存相机参数，供 3D 到 2D 投影关联使用
+    armor_model::Camera cam_; 
+    
+    // 全新的 11维 EKF 目标跟踪器，取代原先的单帧 LM 优化器和 6D 滤波器
+    std::unique_ptr<vision_system::VehicleTracker> tracker;
     
     armor_model::Pose current_pose;
     bool is_tracking = false;
     
     armor_model::FrameObservation latest_obs;
-    armor_model::ModelOptimizer::OptimizationResult latest_opt_result;
 
-    // EKF 状态估计器
-    vision_system::ExtendedKalmanFilter ekf;
     int64_t last_timestamp = 0;
-    bool ekf_initialized = false;
+    bool tracker_initialized = false;
+    
+    // 为了兼容旧代码提供一个 vehicle model
+    armor_model::VehicleModel getVehicleModel() const;
 };
 
 // 全局车辆管理器
