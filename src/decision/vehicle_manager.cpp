@@ -102,7 +102,7 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
             // 补偿车体中心距离装甲板表面的偏移量 (假设 0.15m)
             T_init.translation() += T_init.linear() * Eigen::Vector3d(0, 0, 0.15);
             
-            tracker = std::make_unique<vision_system::VehicleTracker>(init_obs, timestamp, T_init);
+            tracker.reset(new vision_system::VehicleTracker(init_obs, timestamp, T_init));
             tracker_initialized = true;
             is_tracking = true;
         } else {
