@@ -211,7 +211,7 @@ void Pipeline::processLoop() {
 
         // 5. 渲染基础 2D 文本 ID 标签、装甲板 2D 边框以及检测到的所有灯条
         if (config_.getUIConfig().draw_lightbars) {
-            for (const auto& rect : node.detector.getLightbars()) {
+            for (const auto& rect : detector_.getLightbars()) {
                 cv::Point2f pts[4];
                 rect.points(pts);
                 for (int i = 0; i < 4; i++) {
