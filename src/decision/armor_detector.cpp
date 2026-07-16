@@ -39,6 +39,8 @@ std::vector<lightbors> ArmorDetector::detect(const cv::Mat& matImage) {
 
         end_rects.push_back(rotRect);
     }
+    
+    lightbars_ = end_rects; // 缓存供外部绘制使用
 
     if (end_rects.size() >= 2) {
         for (size_t i = 0; i < end_rects.size() - 1; i++) {

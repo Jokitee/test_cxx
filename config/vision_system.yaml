@@ -1,6 +1,6 @@
 %YAML:1.0
 Camera:
-  mode: "video"                 # "camera" (真实相机) 或 "video" (视频测试)
+  mode: "camera"                 # "camera" (真实相机) 或 "video" (视频测试)
   video_path: "demo/test.mp4"   # 当 mode 为 "video" 时生效
   exposure_time: 5000
   gain_r: 100
@@ -32,3 +32,4 @@ UI:
   show_window: 1       # 1=显示窗口, 0=关闭窗口(无头模式运行)
   draw_3d_box: 1       # 1=绘制车辆 3D 优化边框
   draw_2d_id: 1        # 1=绘制装甲板 2D 识别数字
+  draw_lightbars: 1    # 1=绘制所有检测到的灯条

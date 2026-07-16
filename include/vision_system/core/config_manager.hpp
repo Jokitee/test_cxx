@@ -25,6 +25,7 @@ struct UIConfig {
     bool show_window;
     bool draw_3d_box;
     bool draw_2d_id;
+    bool draw_lightbars;
 };
 
 struct SerialConfig {

@@ -10,8 +10,10 @@ class ArmorDetector {
 public:
     ArmorDetector(const DetectorConfig& cfg);
     std::vector<lightbors> detect(const cv::Mat& matImage);
+    const std::vector<cv::RotatedRect>& getLightbars() const { return lightbars_; }
 private:
     DetectorConfig cfg_;
+    std::vector<cv::RotatedRect> lightbars_;
 };
 
 #endif

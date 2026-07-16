@@ -50,6 +50,7 @@ ConfigManager::ConfigManager(const std::string& file_path) {
     ui_cfg_.show_window = (int)ui["show_window"] != 0;
     ui_cfg_.draw_3d_box = (int)ui["draw_3d_box"] != 0;
     ui_cfg_.draw_2d_id = (int)ui["draw_2d_id"] != 0;
+    ui_cfg_.draw_lightbars = (int)ui["draw_lightbars"] != 0;
 
     cv::FileNode ser = fs["Serial"];
     if (!ser.empty()) {
