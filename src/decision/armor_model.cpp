@@ -24,13 +24,16 @@ ArmorPlate::ArmorPlate(int _id, double _d, double _h, double _tilt,
 void ArmorPlate::updateGeometry() {
     double tilt_rad = tilt_angle * M_PI / 180.0;
     
+    // 侧装甲板的高低差（对应 EKF 中的 x(10)）
+    double current_h = (id == 1 || id == 3) ? h : 0.0;
+    
     // 装甲板中心在物体坐标系的位置
-    // 前(0,d,h), 右(d,0,h), 后(0,-d,h), 左(-d,0,h)
+    // 前(0,d,0), 右(d,0,h), 后(0,-d,0), 左(-d,0,h)
     switch (id) {
-        case 0: center_object = Vec3(-d,  0, h); break;  // 前
-        case 1: center_object = Vec3( 0, -d, h); break;  // 右
-        case 2: center_object = Vec3( d,  0, h); break;  // 后
-        case 3: center_object = Vec3( 0,  d, h); break;  // 左
+        case 0: center_object = Vec3(-d,  0, current_h); break;  // 前
+        case 1: center_object = Vec3( 0, -d, current_h); break;  // 右
+        case 2: center_object = Vec3( d,  0, current_h); break;  // 后
+        case 3: center_object = Vec3( 0,  d, current_h); break;  // 左
     }
     
     Vec3 to_center = -center_object;
