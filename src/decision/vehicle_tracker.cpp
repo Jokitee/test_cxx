@@ -46,12 +46,17 @@ Eigen::Matrix3d VehicleTracker::xyz2ypd_jacobian(const Eigen::Vector3d& xyz) {
 VehicleTracker::VehicleTracker(const armor_model::ArmorObservation& init_obs, int64_t t, const armor_model::Pose& T_init)
     : t_(t) {
     
-    Eigen::Vector3d xyz = T_init.translation();
+    Eigen::Vector3d xyz_cam = T_init.translation();
+    // 映射到伪世界坐标系 (X为正前方, Y为左方, Z为上方)
+    // 使得旋转平面位于 X-Y 平面，完美适配原版 EKF 的物理建模
+    double cx = xyz_cam.z();
+    double cy = -xyz_cam.x();
+    double cz = -xyz_cam.y();
     
     // 初始化 11D 状态 [x, vx, y, vy, z, vz, yaw, vyaw, r, l, h]
-    // 假设初始半径 0.3, dz=0.15
+    // 假设初始半径 0.25, dz=0.1
     Eigen::VectorXd x0(11);
-    x0 << xyz.x(), 0.0, xyz.y(), 0.0, xyz.z(), 0.0, 0.0, 0.0, 0.3, 0.0, 0.15;
+    x0 << cx, 0.0, cy, 0.0, cz, 0.0, 0.0, 0.0, 0.25, 0.0, 0.1;
     
     Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(11, 11) * 1.0;
     
@@ -152,7 +157,18 @@ Eigen::MatrixXd VehicleTracker::getArmorJacobian(const Eigen::VectorXd& x, int i
     return H_armor_ypda * H_armor_xyza;
 }
 
-int VehicleTracker::matchArmor(const Eigen::Vector3d& ypd_in_cam, double face_yaw) const {
+int VehicleTracker::matchArmor(const Eigen::Vector3d& t_cam_armor, const Eigen::Matrix3d& R_cam_armor) const {
+    // 将相机的位姿转为伪世界坐标系下的 YPD 和 Face Yaw
+    Eigen::Vector3d t_world_armor(t_cam_armor.z(), -t_cam_armor.x(), -t_cam_armor.y());
+    Eigen::Vector3d ypd_in_world = xyz2ypd(t_world_armor);
+    
+    // 假设装甲板在自身的局部坐标系中法向为 (0, 0, -1) [因为PnP是平面的Z=0,顺时针或逆时针定义]
+    // 提取在相机坐标系下的法向量
+    Eigen::Vector3d N_cam = -R_cam_armor.col(2);
+    // 转换到伪世界坐标系
+    Eigen::Vector3d N_world(N_cam.z(), -N_cam.x(), -N_cam.y());
+    double face_yaw = std::atan2(N_world.y(), N_world.x());
+    
     int best_id = 0;
     double min_error = 1e9;
     
@@ -162,7 +178,7 @@ int VehicleTracker::matchArmor(const Eigen::Vector3d& ypd_in_cam, double face_ya
         double face_yaw_pred = limit_rad(ekf_.x(6) + id * 2.0 * CV_PI / armor_num_);
         
         // 角度误差 = 位置的偏航角误差 + 装甲板自身朝向角误差
-        double error = std::abs(limit_rad(ypd_in_cam[0] - ypd_pred[0])) + 
+        double error = std::abs(limit_rad(ypd_in_world[0] - ypd_pred[0])) + 
                        std::abs(limit_rad(face_yaw - face_yaw_pred));
                        
         if (error < min_error) {
@@ -173,8 +189,16 @@ int VehicleTracker::matchArmor(const Eigen::Vector3d& ypd_in_cam, double face_ya
     return best_id;
 }
 
-void VehicleTracker::update(int plate_id, const Eigen::Vector3d& ypd_in_cam, double face_yaw) {
+void VehicleTracker::update(int plate_id, const Eigen::Vector3d& t_cam_armor, const Eigen::Matrix3d& R_cam_armor) {
     Eigen::MatrixXd H = getArmorJacobian(ekf_.x, plate_id);
+    
+    // 计算 YPD 和 Face Yaw
+    Eigen::Vector3d t_world_armor(t_cam_armor.z(), -t_cam_armor.x(), -t_cam_armor.y());
+    Eigen::Vector3d ypd_in_world = xyz2ypd(t_world_armor);
+    
+    Eigen::Vector3d N_cam = -R_cam_armor.col(2);
+    Eigen::Vector3d N_world(N_cam.z(), -N_cam.x(), -N_cam.y());
+    double face_yaw = std::atan2(N_world.y(), N_world.x());
     
     Eigen::VectorXd R_dig(4);
     R_dig << 4e-3, 4e-3, 0.1, 9e-2;
@@ -198,24 +222,40 @@ void VehicleTracker::update(int plate_id, const Eigen::Vector3d& ypd_in_cam, dou
     };
     
     Eigen::VectorXd z(4);
-    z << ypd_in_cam[0], ypd_in_cam[1], ypd_in_cam[2], face_yaw;
+    z << ypd_in_world[0], ypd_in_world[1], ypd_in_world[2], face_yaw;
     
     ekf_.update(z, H, R, h, z_subtract);
     update_count_++;
 }
 
 armor_model::Pose VehicleTracker::getCurrentPose() const {
-    armor_model::Pose pose = armor_model::Pose::Identity();
-    pose.translation() = Eigen::Vector3d(ekf_.x(0), ekf_.x(2), ekf_.x(4));
+    Eigen::VectorXd x = ekf_.x;
+    // 伪世界坐标系下的中心
+    Eigen::Vector3d xyz_world(x(0), x(2), x(4));
     
-    // Euler angles: yaw around Y axis in this coordinate system?
-    // Our coordinate system OpenCV: X right, Y down, Z forward. 
-    // Wait, the 3D builder assumed X right, Y down, Z forward. 
-    // In `getArmorXYZ`: cx = x - r*cos(yaw), cy = z - r*sin(yaw) ... wait, is `cy` the Z axis?
-    // Let's just create a generic rotation around Y axis
-    double yaw = ekf_.x(6);
-    pose.linear() = Eigen::AngleAxisd(-yaw, Eigen::Vector3d::UnitY()).toRotationMatrix();
-    return pose;
+    // 映射回 OpenCV 相机坐标系 (X为右, Y为下, Z为前)
+    // 根据之前的映射: X_w=Z_c, Y_w=-X_c, Z_w=-Y_c
+    // 所以: X_c = -Y_w, Y_c = -Z_w, Z_c = X_w
+    Eigen::Vector3d xyz_cam(-xyz_world.y(), -xyz_world.z(), xyz_world.x());
+    
+    // 恢复位姿朝向
+    double yaw_world = x(6);
+    
+    // 伪世界坐标系到相机的旋转矩阵
+    Eigen::Matrix3d R_cam_world;
+    R_cam_world <<  0, -1,  0,
+                    0,  0, -1,
+                    1,  0,  0;
+                    
+    Eigen::Matrix3d R_world_obj;
+    R_world_obj << std::cos(yaw_world), -std::sin(yaw_world), 0,
+                   std::sin(yaw_world),  std::cos(yaw_world), 0,
+                                     0,                    0, 1;
+                               
+    armor_model::Pose T;
+    T.linear() = R_cam_world * R_world_obj;
+    T.translation() = xyz_cam;
+    return T;
 }
 
 void VehicleTracker::updateVehicleModel(armor_model::VehicleModel& model) const {

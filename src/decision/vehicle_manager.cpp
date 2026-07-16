@@ -132,24 +132,13 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
                 Eigen::Vector3d t_cam_armor = armor_model::cvMatToEigenVec(t_tmp);
                 Eigen::Matrix3d R_cam_armor = armor_model::cvMatToEigen3d(R_tmp);
                 
-                // 将 XYZ 转换为 YPD
-                double dist = t_cam_armor.norm();
-                double pitch = std::atan2(t_cam_armor.z(), std::sqrt(t_cam_armor.x()*t_cam_armor.x() + t_cam_armor.y()*t_cam_armor.y()));
-                double yaw = std::atan2(t_cam_armor.y(), t_cam_armor.x());
-                
-                // 提取装甲板自身的法向朝向，由于我们在 OpenCV 坐标系，需要提取 Y 轴欧拉角
-                Eigen::Vector3d euler = R_cam_armor.eulerAngles(1, 0, 2); 
-                double face_yaw = euler(0); // 取决于旋转系定义，暂取简单的提取
-                
-                Eigen::Vector3d ypd_in_cam(yaw, pitch, dist);
-                
-                // 使用基于角度的匹配来防止 Target ID Switch，而不是用旧的 2D 检测框匹配 ID
-                int best_id = tracker->matchArmor(ypd_in_cam, face_yaw);
+                // 使用基于角度的匹配来防止 Target ID Switch
+                int best_id = tracker->matchArmor(t_cam_armor, R_cam_armor);
                 
                 // 根据推断出的真实 ID 修正观测
                 const_cast<armor_model::ArmorObservation&>(obs).plate_id = best_id;
                 
-                tracker->update(best_id, ypd_in_cam, face_yaw);
+                tracker->update(best_id, t_cam_armor, R_cam_armor);
             }
         }
         
