@@ -203,7 +203,7 @@ void Pipeline::processLoop() {
 
                     if (config_.getUIConfig().draw_3d_box) {
                         current_frame.image = armor_model::ModelVisualizer::render3DView(
-                            node.optimizer.getModel(), node.current_pose, am_cam_, current_frame.image, &node.latest_obs);
+                            node.getVehicleModel(), node.current_pose, am_cam_, current_frame.image, &node.latest_obs);
                     }
                 }
             }
