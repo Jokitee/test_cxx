@@ -119,6 +119,10 @@ struct ArmorObservation {
     std::array<cv::Point2f, 4> corners_img;  // 图像中检测到的4角点
     double confidence;               // 检测置信度
     int64_t timestamp;               // 时间戳
+    
+    // PnP Debug Info
+    Pose T_cam_armor;
+    bool has_pnp = false;
 };
 
 struct FrameObservation {

@@ -138,8 +138,12 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
                 // 使用基于角度的匹配来防止 Target ID Switch
                 int best_id = tracker->matchArmor(t_cam_armor, R_cam_armor);
                 
-                // 根据推断出的真实 ID 修正观测
-                const_cast<armor_model::ArmorObservation&>(obs).plate_id = best_id;
+                // 根据推断出的真实 ID 修正观测，并保存 PnP 信息供调试渲染
+                auto& mutable_obs = const_cast<armor_model::ArmorObservation&>(obs);
+                mutable_obs.plate_id = best_id;
+                mutable_obs.T_cam_armor.linear() = R_cam_armor;
+                mutable_obs.T_cam_armor.translation() = t_cam_armor;
+                mutable_obs.has_pnp = true;
                 
                 tracker->update(best_id, t_cam_armor, R_cam_armor);
             }

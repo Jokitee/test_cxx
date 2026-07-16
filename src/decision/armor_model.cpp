@@ -501,6 +501,32 @@ cv::Mat ModelVisualizer::render3DView(
                 {armor.corners_img[0], armor.corners_img[1], 
                  armor.corners_img[2], armor.corners_img[3]}
             }, true, cv::Scalar(255, 255, 255), 1);
+            
+            // 绘制 PnP 原始解算法向量 (黄色)
+            if (armor.has_pnp) {
+                // PnP 的法向量是 R_cam_armor 的 Z 轴 (指向装甲板内侧)
+                Vec3 pnp_normal = armor.T_cam_armor.linear().col(2);
+                Vec3 pnp_center = armor.T_cam_armor.translation();
+                
+                // 法向向外贯穿 (反向延长 0.2m)
+                Vec3 pnp_end = pnp_center - 0.2 * pnp_normal;
+                
+                // 投影到图像
+                cv::Point2f center_img(
+                    (armor.corners_img[0].x + armor.corners_img[2].x) / 2.0f,
+                    (armor.corners_img[0].y + armor.corners_img[2].y) / 2.0f
+                );
+                
+                if (pnp_end.z() > 0) {
+                    double u = cam.fx * pnp_end.x() / pnp_end.z() + cam.cx;
+                    double v = cam.fy * pnp_end.y() / pnp_end.z() + cam.cy;
+                    cv::Point2f end_img(static_cast<float>(u), static_cast<float>(v));
+                    
+                    cv::arrowedLine(img, center_img, end_img, cv::Scalar(0, 255, 255), 2); // 黄色箭头表示原始PnP法向
+                    cv::putText(img, "ID:" + std::to_string(armor.plate_id), armor.corners_img[0], 
+                                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
+                }
+            }
         }
     }
     
