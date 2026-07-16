@@ -82,7 +82,7 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
         // 我们通过将装甲板放置在其自身的局部坐标系（Z=0），求解出一个大概的初始位姿
         std::vector<cv::Point3f> objPts(4);
         double w = 0.135 / 2.0;
-        double h = 0.055 / 2.0;
+        double h = (0.055 * 2.4) / 2.0; // 适配检测器中 2.4 倍的垂直拉伸
         // objPts 顺序必须与 imgPts 一致 (top-left, top-right, bottom-right, bottom-left)
         // 在 OpenCV 相机坐标系中，Y向下为正，所以 -h 为 top, +h 为 bottom
         objPts[0] = cv::Point3f(-w, -h, 0); // top-left
@@ -118,7 +118,7 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
         for (const auto& obs : latest_obs.armors) {
             std::vector<cv::Point3f> objPts(4);
             double w = 0.135 / 2.0;
-            double h = 0.055 / 2.0;
+            double h = (0.055 * 2.4) / 2.0; // 适配检测器中 2.4 倍的垂直拉伸
             // objPts 顺序必须与 imgPts 一致 (top-left, top-right, bottom-right, bottom-left)
             objPts[0] = cv::Point3f(-w, -h, 0); // top-left
             objPts[1] = cv::Point3f( w, -h, 0); // top-right
