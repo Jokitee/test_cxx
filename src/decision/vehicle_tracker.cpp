@@ -43,10 +43,14 @@ Eigen::Matrix3d VehicleTracker::xyz2ypd_jacobian(const Eigen::Vector3d& xyz) {
     return J;
 }
 
-VehicleTracker::VehicleTracker(const armor_model::ArmorObservation& init_obs, int64_t t, const armor_model::Pose& T_init)
+VehicleTracker::VehicleTracker(const armor_model::ArmorObservation& init_obs, int64_t t, const armor_model::Pose& T_init, const SavedVehicleParams& params) 
     : t_(t) {
+    // 根据板的ID推断是几块板模型
+    armor_num_ = (init_obs.plate_id == 0 || init_obs.plate_id == 2) ? 4 : 4; 
     
-    Eigen::Vector3d xyz_cam = T_init.translation();
+    Eigen::Vector3d t_cam_armor = T_init.translation();
+    Eigen::Matrix3d R_cam_armor = T_init.linear();
+    Eigen::Vector3d xyz_cam = t_cam_armor;
     
     // 映射到伪世界坐标系
     double cx = xyz_cam.z();
@@ -58,16 +62,26 @@ VehicleTracker::VehicleTracker(const armor_model::ArmorObservation& init_obs, in
     Eigen::Vector3d N_world(N_cam.z(), -N_cam.x(), -N_cam.y());
     double face_yaw = std::atan2(N_world.y(), N_world.x());
     
-    // 假设初始半径 0.25, dz=0.1
-    double r = 0.25;
-    cx += r * std::cos(face_yaw);
-    cy += r * std::sin(face_yaw);
+    // 从缓存参数或默认值初始化半径和高度偏移
+    double r_init = params.valid ? params.r : 0.25;
+    double dz_init = params.valid ? params.dz : 0.0;
+    double h_init = params.valid ? params.h : 0.1;
+
+    cx += r_init * std::cos(face_yaw);
+    cy += r_init * std::sin(face_yaw);
     
-    // 初始化 11D 状态 [x, vx, y, vy, z, vz, yaw, vyaw, r, l, h]
+    // 初始化 11D 状态 [x, vx, y, vy, z, vz, yaw, vyaw, r, dz, h]
     Eigen::VectorXd x0(11);
-    x0 << cx, 0.0, cy, 0.0, cz, 0.0, face_yaw, 0.0, r, 0.0, 0.1;
+    x0 << cx, 0.0, cy, 0.0, cz, 0.0, face_yaw, 0.0, r_init, dz_init, h_init;
     
     Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(11, 11) * 1.0;
+    
+    // 如果使用了历史收敛参数，则直接赋予较小的初始协方差
+    if (params.valid) {
+        P0(8, 8) = 1e-4;
+        P0(9, 9) = 1e-4;
+        P0(10, 10) = 1e-4;
+    }
     
     auto x_add = [](const Eigen::VectorXd& a, const Eigen::VectorXd& b) -> Eigen::VectorXd {
         Eigen::VectorXd c = a + b;

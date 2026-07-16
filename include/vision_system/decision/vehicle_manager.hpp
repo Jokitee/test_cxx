@@ -21,7 +21,7 @@ public:
     void addArmor(const lightbors& armor);
     
     // 执行当前帧的内部模型迭代与位姿更新
-    void processFrame(int64_t timestamp, PoseEstimator& estimator);
+    void processFrame(int64_t timestamp, PoseEstimator& estimator, vision_system::SavedVehicleParams& saved_params);
 
     std::string vehicle_id;
     VehicleArmors armors_buffer;
@@ -56,6 +56,7 @@ public:
 
 private:
     std::map<std::string, VehicleNode> nodes_;
+    std::map<std::string, vision_system::SavedVehicleParams> saved_params_;
     armor_model::Camera am_cam_;
     PoseEstimator& estimator_;
 };

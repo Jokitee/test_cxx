@@ -1,9 +1,9 @@
-/**
+﻿/**
  * @brief 车辆实体追踪与状态管理器
  * @author jokit
  * @date 2026-07-15
  */
-#include "vision_system/decision/vehicle_manager.hpp"
+#include vision_system/decision/vehicle_manager.hpp
 
 VehicleNode::VehicleNode(const std::string& id, const armor_model::Camera& cam) 
     : vehicle_id(id), cam_(cam) 
@@ -22,7 +22,7 @@ void VehicleNode::addArmor(const lightbors& armor) {
     armors_buffer.addPlate(armor);
 }
 
-void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
+void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator, vision_system::SavedVehicleParams& saved_params) {
     if (armors_buffer.plates.empty()) {
         is_tracking = false;
         latest_obs.armors.clear();
@@ -101,10 +101,8 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
             T_init.linear() = armor_model::cvMatToEigen3d(R_wo_tmp);
             T_init.translation() = armor_model::cvMatToEigenVec(t_wo_tmp);
             
-            // EKF内部会根据半径r进行补偿，这里直接传入观测到的装甲板位姿
-            // T_init.translation() += T_init.linear() * Eigen::Vector3d(0, 0, 0.15);
-            
-            tracker.reset(new vision_system::VehicleTracker(init_obs, timestamp, T_init));
+            // 使用可能存在的历史收敛参数来初始化
+            tracker.reset(new vision_system::VehicleTracker(init_obs, timestamp, T_init, saved_params));
             tracker_initialized = true;
             is_tracking = true;
         } else {
@@ -151,6 +149,19 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
         
         current_pose = tracker->getCurrentPose();
         is_tracking = true;
+        
+        // 检查参数是否收敛并持久化保留
+        if (tracker->update_count_ > 50) {
+            Eigen::MatrixXd P = tracker->getEKFCovariance();
+            // 协方差较小代表模型已稳定
+            if ((P(8,8) + P(9,9) + P(10,10)) < 1e-3) {
+                Eigen::VectorXd state = tracker->getEKFState();
+                saved_params.r = state(8);
+                saved_params.dz = state(9);
+                saved_params.h = state(10);
+                saved_params.valid = true;
+            }
+        }
     }
     
     // 3. 清理当前帧缓存，准备接收下一帧的消息订阅
@@ -165,7 +176,7 @@ void VehicleManager::update(const std::vector<lightbors>& armors, int64_t timest
     // 1. 将检测到的有效装甲板按车辆 ID 分发
     for (const auto& armor : armors) {
         if (!armor.righting) continue;
-        if (armor.ID == "unknown" || armor.ID == "unknow") continue;
+        if (armor.ID == unknown || armor.ID == unknow) continue;
         
         std::string id = armor.ID;
         // 如果车辆实体尚不存在，则在管理器中进行实例化注册
@@ -177,6 +188,7 @@ void VehicleManager::update(const std::vector<lightbors>& armors, int64_t timest
     
     // 2. 发送信号驱动所有在册的车辆节点开始当前帧的位姿解算和模型迭代
     for (auto& pair : nodes_) {
-        pair.second.processFrame(timestamp, estimator_);
+        pair.second.processFrame(timestamp, estimator_, saved_params_[pair.first]);
     }
 }
+

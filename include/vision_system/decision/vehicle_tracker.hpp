@@ -9,10 +9,17 @@
 
 namespace vision_system {
 
+struct SavedVehicleParams {
+    double r;
+    double dz;
+    double h;
+    bool valid = false;
+};
+
 class VehicleTracker {
 public:
     // T_init is the initial camera-to-object pose
-    VehicleTracker(const armor_model::ArmorObservation& init_obs, int64_t t, const armor_model::Pose& T_init);
+    VehicleTracker(const armor_model::ArmorObservation& init_obs, int64_t t, const armor_model::Pose& T_init, const SavedVehicleParams& params = {});
 
     void predict(int64_t t);
     
@@ -21,6 +28,7 @@ public:
     void update(int plate_id, const Eigen::Vector3d& t_cam_armor, const Eigen::Matrix3d& R_cam_armor);
 
     Eigen::VectorXd getEKFState() const { return ekf_.getState(); }
+    Eigen::MatrixXd getEKFCovariance() const { return ekf_.P; }
     
     // x vx y vy z vz yaw vyaw r l h
     // 0  1  2  3  4  5   6    7   8 9 10

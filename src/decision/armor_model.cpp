@@ -102,7 +102,8 @@ VehicleModel::VehicleModel(double d_init, double h_init, double tilt)
     
     plates_.reserve(4);
     for (int i = 0; i < 4; ++i) {
-        plates_.emplace_back(i, d_, h_, tilt_, 0.135, 0.055);
+        // 使用整个物理装甲板的外围真实尺寸 (140mm x 125mm) 进行构建与渲染
+        plates_.emplace_back(i, d_, h_, tilt_, 0.140, 0.125);
     }
 }
 
