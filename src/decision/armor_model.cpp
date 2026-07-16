@@ -518,9 +518,8 @@ cv::Mat ModelVisualizer::render3DView(
                 );
                 
                 if (pnp_end.z() > 0) {
-                    double u = cam.fx * pnp_end.x() / pnp_end.z() + cam.cx;
-                    double v = cam.fy * pnp_end.y() / pnp_end.z() + cam.cy;
-                    cv::Point2f end_img(static_cast<float>(u), static_cast<float>(v));
+                    Pose T_identity = Pose::Identity();
+                    cv::Point2f end_img = cam.project(pnp_end, T_identity);
                     
                     cv::arrowedLine(img, center_img, end_img, cv::Scalar(0, 255, 255), 2); // 黄色箭头表示原始PnP法向
                     cv::putText(img, "ID:" + std::to_string(armor.plate_id), armor.corners_img[0], 
