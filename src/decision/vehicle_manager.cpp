@@ -83,10 +83,12 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
         std::vector<cv::Point3f> objPts(4);
         double w = 0.135 / 2.0;
         double h = 0.055 / 2.0;
-        objPts[0] = cv::Point3f(-w,  h, 0);
-        objPts[1] = cv::Point3f(-w, -h, 0);
-        objPts[2] = cv::Point3f( w, -h, 0);
-        objPts[3] = cv::Point3f( w,  h, 0);
+        // objPts 顺序必须与 imgPts 一致 (top-left, top-right, bottom-right, bottom-left)
+        // 在 OpenCV 相机坐标系中，Y向下为正，所以 -h 为 top, +h 为 bottom
+        objPts[0] = cv::Point3f(-w, -h, 0); // top-left
+        objPts[1] = cv::Point3f( w, -h, 0); // top-right
+        objPts[2] = cv::Point3f( w,  h, 0); // bottom-right
+        objPts[3] = cv::Point3f(-w,  h, 0); // bottom-left
         
         std::vector<cv::Point2f> imgPts = {
             init_obs.corners_img[0], init_obs.corners_img[1],
@@ -117,10 +119,11 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator) {
             std::vector<cv::Point3f> objPts(4);
             double w = 0.135 / 2.0;
             double h = 0.055 / 2.0;
-            objPts[0] = cv::Point3f(-w,  h, 0);
-            objPts[1] = cv::Point3f(-w, -h, 0);
-            objPts[2] = cv::Point3f( w, -h, 0);
-            objPts[3] = cv::Point3f( w,  h, 0);
+            // objPts 顺序必须与 imgPts 一致 (top-left, top-right, bottom-right, bottom-left)
+            objPts[0] = cv::Point3f(-w, -h, 0); // top-left
+            objPts[1] = cv::Point3f( w, -h, 0); // top-right
+            objPts[2] = cv::Point3f( w,  h, 0); // bottom-right
+            objPts[3] = cv::Point3f(-w,  h, 0); // bottom-left
             
             std::vector<cv::Point2f> imgPts = {
                 obs.corners_img[0], obs.corners_img[1],
