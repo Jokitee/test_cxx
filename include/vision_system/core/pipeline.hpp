@@ -13,6 +13,7 @@
 #include "vision_system/decision/classifier.hpp"
 #include "vision_system/decision/pnp_estimator.hpp"
 #include "vision_system/decision/armor_model.hpp"
+#include "vision_system/decision/fire_control_planner.hpp"
 #include "vision_system/output/serial_port.hpp"
 
 struct FrameData {
@@ -58,6 +59,9 @@ private:
     // 预分配模型对象以避免重复分配
     armor_model::Camera am_cam_;
     armor_model::VehicleModel am_model_;
+    
+    // 决策规划器
+    rma::FireControlPlanner planner_;
     
     // 系统资源探测
     unsigned int num_cores_;

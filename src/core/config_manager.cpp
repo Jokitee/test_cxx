@@ -58,6 +58,31 @@ ConfigManager::ConfigManager(const std::string& file_path) {
         serial_cfg_.baud_rate = (int)ser["baud_rate"];
     }
 
+    cv::FileNode pln = fs["Planner"];
+    if (!pln.empty()) {
+        planner_cfg_.w_dist = (double)pln["w_dist"];
+        planner_cfg_.w_angle = (double)pln["w_angle"];
+        planner_cfg_.w_conf = (double)pln["w_conf"];
+        planner_cfg_.w_threat = (double)pln["w_threat"];
+        planner_cfg_.switch_threshold = (double)pln["switch_threshold"];
+        planner_cfg_.min_effective_angle = (double)pln["min_effective_angle"];
+        planner_cfg_.max_lost_frames = (int)pln["max_lost_frames"];
+        planner_cfg_.max_cov_trace = (double)pln["max_cov_trace"];
+        planner_cfg_.max_range = (double)pln["max_range"];
+        planner_cfg_.max_normal_angle = (double)pln["max_normal_angle"];
+        planner_cfg_.lambda = (double)pln["lambda"];
+        planner_cfg_.base_thresh = (double)pln["base_thresh"];
+        planner_cfg_.min_lock_frames = (int)pln["min_lock_frames"];
+        planner_cfg_.alpha = (double)pln["alpha"];
+        planner_cfg_.max_rate = (double)pln["max_rate"];
+    } else {
+        // Defaults
+        planner_cfg_.w_dist = 0.40; planner_cfg_.w_angle = 0.35; planner_cfg_.w_conf = 0.20; planner_cfg_.w_threat = 0.05;
+        planner_cfg_.switch_threshold = 0.35; planner_cfg_.min_effective_angle = 0.70;
+        planner_cfg_.max_lost_frames = 10; planner_cfg_.max_cov_trace = 100.0; planner_cfg_.max_range = 15.0; planner_cfg_.max_normal_angle = 1.57;
+        planner_cfg_.lambda = 0.2; planner_cfg_.base_thresh = 0.05; planner_cfg_.min_lock_frames = 5; planner_cfg_.alpha = 0.3; planner_cfg_.max_rate = 10.0;
+    }
+
     fs.release();
     loaded_ = true;
 }

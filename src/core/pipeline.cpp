@@ -18,6 +18,20 @@ Pipeline::Pipeline(const std::string& config_path)
       am_cam_(estimator_.cameraMatrix(), estimator_.distCoeffs(), 1280, 720),
       am_model_(0.300, 0.150, 15.0)
 {
+    // 初始化规划器配置
+    auto p_cfg = config_.getPlannerConfig();
+    rma::ScoringWeights sw{p_cfg.w_dist, p_cfg.w_angle, p_cfg.w_conf, p_cfg.w_threat};
+    rma::ArmorSelectConfig ac{p_cfg.switch_threshold, p_cfg.min_effective_angle};
+    rma::FilterConfig fc{p_cfg.max_lost_frames, p_cfg.max_cov_trace, p_cfg.max_range, p_cfg.max_normal_angle};
+    planner_.setScoringWeights(sw);
+    planner_.setArmorSelectConfig(ac);
+    planner_.setFilterConfig(fc);
+    planner_.setSwitchPenaltyLambda(p_cfg.lambda);
+    planner_.setBaseAngleThreshold(p_cfg.base_thresh);
+    planner_.setMinLockStableFrames(p_cfg.min_lock_frames);
+    planner_.setSmoothingAlpha(p_cfg.alpha);
+    planner_.setMaxAngularRate(p_cfg.max_rate);
+
     // ==========================================
     // 1. 系统核心探测与多线程资源分配调度
     // ==========================================
@@ -166,40 +180,105 @@ void Pipeline::processLoop() {
             vehicle_manager.update(armors, current_frame.timestamp);
         }
 
-        // 4. 获取最新的车辆追踪状态并渲染三维框
+        // ============================================
+        // 4. 构建 PlannerInput 并调用 FireControlPlanner
+        // ============================================
+        rma::PlannerInput planner_input;
+        planner_input.gimbal_position = Eigen::Vector3d(0.0, 0.0, 0.0); 
+        planner_input.gimbal_yaw = 0.0;
+        planner_input.gimbal_pitch = 0.0;
+        
+        static int64_t last_time = 0;
+        if (last_time > 0) {
+            planner_input.dt = (current_frame.timestamp - last_time) / 1000.0;
+        } else {
+            planner_input.dt = 1.0 / 120.0; 
+        }
+        last_time = current_frame.timestamp;
+        
+        planner_input.ballistic_params.bullet_speed = 17.0;
+        planner_input.ballistic_params.drag_k = 0.0;
+
+        Eigen::Vector3d cam_offset(0.0, -0.40, 0.10);
+        armor_model::Pose T_cam_world = CoordinateTransformer::calcCameraToWorld(0.0f, 0.0f, cam_offset);
+
+        for (auto& pair : vehicle_manager.getNodes()) {
+            VehicleNode& node = pair.second;
+            if (!node.is_tracking || node.latest_obs.armors.empty() || !node.tracker) continue;
+
+            rma::TargetState ts;
+            try {
+                ts.vehicle_id = std::stoi(node.vehicle_id);
+            } catch(...) {
+                ts.vehicle_id = 1; // 默认 fallback
+            }
+            ts.frames_since_update = 0; 
+            ts.total_observed_frames = node.tracker->update_count_;
+            ts.model_state = rma::ModelState::FULL; 
+
+            Eigen::VectorXd x = node.tracker->getEKFState();
+            Eigen::MatrixXd P = node.tracker->getEKFCovariance();
+            ts.covariance = P;
+
+            Eigen::Vector3d xyz_pseudo(x(0), x(2), x(4)); 
+            Eigen::Vector3d v_pseudo(x(1), x(3), x(5));
+            
+            Eigen::Vector3d xyz_cam(-xyz_pseudo.y(), -xyz_pseudo.z(), xyz_pseudo.x());
+            Eigen::Vector3d v_cam(-v_pseudo.y(), -v_pseudo.z(), v_pseudo.x());
+
+            Eigen::Vector3d xyz_world_cv = T_cam_world * xyz_cam;
+            Eigen::Vector3d v_world_cv = T_cam_world.linear() * v_cam;
+
+            // Planner Coordinate System: X Right, Y Up, Z Forward
+            ts.position = Eigen::Vector3d(xyz_world_cv.x(), -xyz_world_cv.y(), xyz_world_cv.z());
+            ts.velocity = Eigen::Vector3d(v_world_cv.x(), -v_world_cv.y(), v_world_cv.z());
+
+            ts.angular_velocity = Eigen::Vector3d(0, -x(7), 0); 
+            ts.rotation_radius = x(8);
+
+            int armor_num = 4;
+            for (int i = 0; i < armor_num; ++i) {
+                rma::ArmorPlate ap;
+                ap.id = i;
+                
+                Eigen::Vector3d a_pseudo = node.tracker->getArmorXYZ(x, i);
+                Eigen::Vector3d a_cam(-a_pseudo.y(), -a_pseudo.z(), a_pseudo.x());
+                Eigen::Vector3d a_world_cv = T_cam_world * a_cam;
+                ap.position = Eigen::Vector3d(a_world_cv.x(), -a_world_cv.y(), a_world_cv.z());
+
+                double armor_yaw = x(6) + i * M_PI / 2.0;
+                Eigen::Vector3d n_pseudo(std::cos(armor_yaw), std::sin(armor_yaw), 0);
+                Eigen::Vector3d n_cam(-n_pseudo.y(), -n_pseudo.z(), n_pseudo.x());
+                Eigen::Vector3d n_world_cv = T_cam_world.linear() * n_cam;
+                ap.normal = Eigen::Vector3d(n_world_cv.x(), -n_world_cv.y(), n_world_cv.z());
+
+                Eigen::Vector3d los = (planner_input.gimbal_position - ap.position).normalized();
+                double cos_theta = ap.normal.dot(los);
+                cos_theta = std::max(-1.0, std::min(1.0, cos_theta));
+                ap.relative_angle = std::acos(cos_theta);
+                
+                ap.angle_rate = x(7); 
+                ts.armors.push_back(ap);
+            }
+            planner_input.targets.push_back(ts);
+        }
+
+        rma::FireControlOutput planner_out = planner_.update(planner_input);
+
+        if (sender_ != nullptr && config_.getModulesConfig().enable_serial) {
+            if (planner_out.state != rma::TrackingState::SEARCHING) {
+                float yaw = static_cast<float>(planner_out.target_yaw * 180.0 / M_PI);
+                float pitch = static_cast<float>(planner_out.target_pitch * 180.0 / M_PI);
+                sender_->sendTarget(yaw, pitch, 0, 0);
+            }
+        }
+
+        // 5. 渲染三维框 (剥离了原有的解算代码)
         if (config_.getUIConfig().draw_3d_box || sender_ != nullptr) {
             for (auto& pair : vehicle_manager.getNodes()) {
                 VehicleNode& node = pair.second;
-                // 只有当这个车辆在当前帧依然被跟踪且成功解算，才进行操作
                 if (node.is_tracking && !node.latest_obs.armors.empty()) {
-                    
-                    // --- 串口发送控制指令与坐标系变换 ---
-                    if (sender_ != nullptr && config_.getModulesConfig().enable_serial) {
-                        // 1. 目标在相机坐标系下的 3D 位置
-                        Eigen::Vector3d pos_cam = node.current_pose.translation();
-                        
-                        // 2. 测试阶段：固定相机在载车的上方 40cm，前 10cm。无偏航俯仰。
-                        // 遵循 OpenCV 坐标系：X 右，Y 下，Z 前。
-                        // 上方 40cm -> Y = -0.40m
-                        // 前方 10cm -> Z = 0.10m
-                        Eigen::Vector3d cam_offset(0.0, -0.40, 0.10);
-                        
-                        // 3. 实时计算当前相机到载车坐标系的变换矩阵 T_cam_world
-                        armor_model::Pose T_cam_world = CoordinateTransformer::calcCameraToWorld(0.0f, 0.0f, cam_offset);
-                        
-                        // 4. 将目标坐标点转换到载车底盘(世界)坐标系
-                        Eigen::Vector3d pos_world = T_cam_world * pos_cam;
-                        
-                        // 5. 根据车身坐标系提取真实解算的偏航角和俯仰角
-                        double x = pos_world.x();
-                        double y = pos_world.y();
-                        double z = pos_world.z();
-                        
-                        float yaw = static_cast<float>(atan2(x, z) * 180.0 / CV_PI);
-                        float pitch = static_cast<float>(atan2(-y, z) * 180.0 / CV_PI);
-                        
-                        sender_->sendTarget(yaw, pitch, 0, 0);
-                    }
+
 
                     if (config_.getUIConfig().draw_3d_box) {
                         current_frame.image = armor_model::ModelVisualizer::render3DView(

@@ -40,6 +40,24 @@ struct ModulesConfig {
     bool enable_serial;
 };
 
+struct PlannerConfig {
+    double w_dist;
+    double w_angle;
+    double w_conf;
+    double w_threat;
+    double switch_threshold;
+    double min_effective_angle;
+    int max_lost_frames;
+    double max_cov_trace;
+    double max_range;
+    double max_normal_angle;
+    double lambda;
+    double base_thresh;
+    int min_lock_frames;
+    double alpha;
+    double max_rate;
+};
+
 class ConfigManager {
 public:
     ConfigManager(const std::string& file_path);
@@ -49,6 +67,7 @@ public:
     UIConfig getUIConfig() const { return ui_cfg_; }
     SerialConfig getSerialConfig() const { return serial_cfg_; }
     ModulesConfig getModulesConfig() const { return mod_cfg_; }
+    PlannerConfig getPlannerConfig() const { return planner_cfg_; }
 private:
     bool loaded_ = false;
     CameraConfig cam_cfg_;
@@ -56,6 +75,7 @@ private:
     UIConfig ui_cfg_;
     SerialConfig serial_cfg_;
     ModulesConfig mod_cfg_;
+    PlannerConfig planner_cfg_;
 };
 
 #endif
