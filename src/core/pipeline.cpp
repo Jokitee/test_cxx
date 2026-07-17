@@ -20,9 +20,19 @@ Pipeline::Pipeline(const std::string& config_path)
 {
     // 初始化规划器配置
     auto p_cfg = config_.getPlannerConfig();
-    rma::ScoringWeights sw{p_cfg.w_dist, p_cfg.w_angle, p_cfg.w_conf, p_cfg.w_threat};
-    rma::ArmorSelectConfig ac{p_cfg.switch_threshold, p_cfg.min_effective_angle};
-    rma::FilterConfig fc{p_cfg.max_lost_frames, p_cfg.max_cov_trace, p_cfg.max_range, p_cfg.max_normal_angle};
+    rma::ScoringWeights sw;
+    sw.w_dist   = p_cfg.w_dist;
+    sw.w_angle  = p_cfg.w_angle;
+    sw.w_conf   = p_cfg.w_conf;
+    sw.w_threat = p_cfg.w_threat;
+    rma::ArmorSelectConfig ac;
+    ac.switch_threshold    = p_cfg.switch_threshold;
+    ac.min_effective_angle = p_cfg.min_effective_angle;
+    rma::FilterConfig fc;
+    fc.max_lost_frames  = p_cfg.max_lost_frames;
+    fc.max_cov_trace    = p_cfg.max_cov_trace;
+    fc.max_range        = p_cfg.max_range;
+    fc.max_normal_angle = p_cfg.max_normal_angle;
     planner_.setScoringWeights(sw);
     planner_.setArmorSelectConfig(ac);
     planner_.setFilterConfig(fc);
