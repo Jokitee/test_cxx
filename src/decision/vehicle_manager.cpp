@@ -11,8 +11,7 @@ VehicleNode::VehicleNode(const std::string& id, const armor_model::Camera& cam)
 }
 
 armor_model::VehicleModel VehicleNode::getVehicleModel() const {
-    // 默认参数与 VehicleTracker 中 r_init/h_init 保持一致
-    armor_model::VehicleModel model(0.200, 0.100, 15.0);
+    armor_model::VehicleModel model(0.300, 0.150, 15.0);
     if (tracker) {
         tracker->updateVehicleModel(model);
     }
@@ -134,27 +133,8 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator, visi
                 Eigen::Vector3d t_cam_armor = armor_model::cvMatToEigenVec(t_tmp);
                 Eigen::Matrix3d R_cam_armor = armor_model::cvMatToEigen3d(R_tmp);
                 
-                // ---- 测量有效性门限（Measurement Gating） ----
-                // 1. 距离合理性：装甲板应在 0.3m ~ 8.0m 范围内
-                //    防止检测角点突变导致 PnP 解算出异常距离
-                double measured_dist = t_cam_armor.norm();
-                if (measured_dist < 0.3 || measured_dist > 8.0) continue;
-                
                 // 使用基于角度的匹配来防止 Target ID Switch
                 int best_id = tracker->matchArmor(t_cam_armor, R_cam_armor);
-                
-                // 2. 与EKF预测一致性检查：EKF收敛后才启用，防止初始化阶段误拒
-                //    将EKF预测的装甲板世界坐标转换回相机坐标系进行比较
-                //    坐标系映射: X_cam=-Y_world, Y_cam=-Z_world, Z_cam=X_world
-                if (tracker->update_count_ > 5) {
-                    Eigen::VectorXd state = tracker->getEKFState();
-                    Eigen::Vector3d pred_world = tracker->getArmorXYZ(state, best_id);
-                    Eigen::Vector3d pred_cam(-pred_world.y(), -pred_world.z(), pred_world.x());
-                    double pos_error = (t_cam_armor - pred_cam).norm();
-                    // 偏差超过 0.6m 时判定为检测突变，拒绝本次更新
-                    if (pos_error > 0.6) continue;
-                }
-                // ---- 门限检查结束 ----
                 
                 // 根据推断出的真实 ID 修正观测，并保存 PnP 信息供调试渲染
                 auto& mutable_obs = const_cast<armor_model::ArmorObservation&>(obs);
