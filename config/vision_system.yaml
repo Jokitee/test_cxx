@@ -1,7 +1,7 @@
 %YAML:1.0
 Camera:
-  mode: "camera"                 # "camera" (真实相机) 或 "video" (视频测试)
-  video_path: "demo/test.mp4"   # 当 mode 为 "video" 时生效
+  mode: "video"                 # "camera" (真实相机) 或 "video" (视频测试)
+  video_path: "demo/video1.mp4"   # 当 mode 为 "video" 时生效
   exposure_time: 5000
   gain_r: 100
   gain_g: 70
