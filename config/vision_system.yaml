@@ -22,10 +22,10 @@ Detector:
   area_min: 50.0
   area_max: 9000.0
   ratio_min: 4.0
-  ratio_max: 18.0
+  ratio_max: 15.0
   angle_min: 5.0
   angle_max: 175.0
-  distance_min: 1.8
+  distance_min: 2.1
   distance_max: 3.0
 
 UI:
