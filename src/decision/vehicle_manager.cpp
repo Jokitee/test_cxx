@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @brief 车辆实体追踪与状态管理器
  * @author jokit
  * @date 2026-07-15
@@ -176,7 +176,7 @@ void VehicleManager::update(const std::vector<lightbors>& armors, int64_t timest
     // 1. 将检测到的有效装甲板按车辆 ID 分发
     for (const auto& armor : armors) {
         if (!armor.righting) continue;
-        if (armor.ID == unknown || armor.ID == unknow) continue;
+        if (armor.ID == "unknown" || armor.ID.empty()) continue;
         
         std::string id = armor.ID;
         // 如果车辆实体尚不存在，则在管理器中进行实例化注册
