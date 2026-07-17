@@ -25,12 +25,12 @@ Detector:
   ratio_max: 18.0
   angle_min: 5.0
   angle_max: 175.0
-  distance_min: 1.7
-  distance_max: 3.0
+  distance_min: 1.0
+  distance_max: 2.6
 
 UI:
   show_window: 1       # 1=显示窗口, 0=关闭窗口(无头模式运行)
-  draw_3d_box: 1       # 1=绘制车辆 3D 优化边框
+  draw_3d_box: 1      # 1=绘制车辆 3D 优化边框
   draw_2d_id: 1        # 1=绘制装甲板 2D 识别数字
   draw_lightbars: 1    # 1=绘制所有检测到的灯条
 
