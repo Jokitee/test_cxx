@@ -208,77 +208,6 @@ void CropAndResize(const lightbors& armor_light, cv::Mat& endB, cv::Mat& outImag
     }
 }
 
-// 自研分类算法 (原 SVM 模型 - 已注释化)
-/*
-class FeatureDetector8Classes {
-private:
-    cv::Ptr<cv::ml::SVM> svm;
-    cv::HOGDescriptor hog;
-    cv::Size imgSize = cv::Size(48, 36); // 归一化尺寸，需与训练时一致
-    
-    // 映射表：SVM输出的索引 0~7 对应您的8个特征名称
-    std::vector<std::string> class_names = {"1", "2", "3", "4", "5", "6", "7", "sentinel"};
- 
-public:
-    FeatureDetector8Classes() {
-        // 初始化HOG参数（低算力优选参数）
-        hog.winSize = imgSize;
-        hog.blockSize = cv::Size(12, 12);
-        hog.blockStride = cv::Size(6, 6);
-        hog.cellSize = cv::Size(6, 6);
-        hog.nbins = 9;
-        
-        // 加载训练好的SVM模型
-        try {
-            svm = cv::ml::SVM::load("asset/svm_model.xml");
-            if (svm.empty()) {
-                std::cerr << "模型加载失败" << std::endl;
-            }
-        } catch (const cv::Exception& e) {
-            std::cerr << "模型加载异常: " << e.what() << std::endl;
-            svm.release();
-        }
-    }
- 
-    std::string detect(const cv::Mat& inputImg, lightbors& armor_light) {
-        if (inputImg.empty()) return "unknown";
- 
-        // ================= 1. 图像归一化处理 =================
-        cv::Mat normalizedImg;
-        // 尺寸归一化
-        resize(inputImg, normalizedImg, imgSize, 0, 0, cv::INTER_LINEAR);
-
-        if (normalizedImg.channels() == 3) {
-        cvtColor(normalizedImg, normalizedImg, cv::COLOR_BGR2GRAY);
-        }
-
-        // 光照归一化（抗光照干扰）
-        equalizeHist(normalizedImg, normalizedImg);
-        // ====================================================
- 
-        // ================= 2. 特征提取 =================
-        std::vector<float> descriptors;
-        hog.compute(normalizedImg, descriptors);
-        cv::Mat featureMat(1, descriptors.size(), CV_32FC1, descriptors.data());
- 
-        // ================= 3. 分类预测 =================
-        cv::Mat response;
-        svm->predict(featureMat, response);
-        
-        // 获取SVM预测的整数索引 (0~7)
-        int predicted_label = static_cast<int>(response.at<float>(0, 0));
-        
-        // 将索引映射为指定的名称并返回
-        if (predicted_label >= 0 && predicted_label < 8) {
-            armor_light.righting = 1;
-            return class_names[predicted_label];
-        }
-        armor_light.righting = 0;
-        return "unknown";
-    }
-};
-*/
-
 // 新的 ONNX 分类模型算法
 class FeatureDetectorONNX {
 private:
@@ -499,59 +428,6 @@ private:
     bool extrinsicsSet_    = false;
 };
 
-// 画三维立体框
-void drawCube(
-    cv::Mat& image,
-    const cv::Mat& R_wo,
-    const cv::Mat& t_wo,
-    const cv::Mat& K,
-    const cv::Mat& dist)
-{
-    // 静态缓存，避免重复分配
-    static std::vector<cv::Point3f> cube3d;
-    std::vector<cv::Point3f> pts_cam;
-    std::vector<cv::Point2f> pts2d;
-    
-    if (cube3d.empty()) {
-        float h = 125.0f, w = 135.0f, l = 30.0f;
-        cube3d = {
-        {-w/2,-h/2,0}, {w/2,-h/2,0}, {w/2,h/2,0}, {-w/2,h/2,0},
-        {-w/2,-h/2,l}, {w/2,-h/2,l}, {w/2,h/2,l}, {-w/2,h/2,l}
-        };
-    }
-    
-    pts_cam.resize(8);
-    pts2d.resize(8);
-    
-    // 使用原始指针/数组，避免 cv::Mat 堆分配
-    const double* R = R_wo.ptr<double>();
-    const double* t = t_wo.ptr<double>();
-    
-    for (int i = 0; i < 8; ++i) {
-        const auto& p = cube3d[i];
-        double x = R[0]*p.x + R[1]*p.y + R[2]*p.z + t[0];
-        double y = R[3]*p.x + R[4]*p.y + R[5]*p.z + t[1];
-        double z = R[6]*p.x + R[7]*p.y + R[8]*p.z + t[2];
-        pts_cam[i] = cv::Point3f(static_cast<float>(x),
-                                  static_cast<float>(y),
-                                  static_cast<float>(z));
-    }
-    
-    cv::projectPoints(pts_cam, cv::Vec3d::zeros(), cv::Vec3d::zeros(),
-                      K, dist, pts2d);
-
-    // 画 12 条边
-    int edges[][2] = {
-        {0,1},{1,2},{2,3},{3,0},   // 底面
-        {4,5},{5,6},{6,7},{7,4},   // 顶面
-        {0,4},{1,5},{2,6},{3,7}    // 竖边
-    };
-    for (auto& e : edges) {
-        cv::line(image, pts2d[e[0]], pts2d[e[1]],
-                 cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
-    }
-}
-
 int main(){
     int iCameraCounts = 1;
     int iStatues = -1;
@@ -765,74 +641,8 @@ int main(){
                     }
                 }
 
-                // 对于每个车辆分别进行位姿解算和优化
-                for(auto& pair : vehicles){
-                    const auto& vehicle = pair.second;
-                    armor_model::FrameObservation obs = vehicle.getObservation(0);
-                    
-                    armor_model::Pose T_init = armor_model::Pose::Identity();
-                    bool has_init_pose = false;
-
-                    // 借用老 PnP 提供一个基础初值 (T_init)
-                    // 为了初始位姿能更好收敛，用被判断为前装甲板(0号)或排在最后(最右边)的一块作初值计算
-                    lightbors init_plate = vehicle.plates[0];
-                    if (vehicle.plates.size() > 1) {
-                        for (const auto& p : vehicle.plates) {
-                            if (p.armor_center.x > init_plate.armor_center.x) {
-                                init_plate = p;
-                            }
-                        }
-                    }
-
-                    cv::Vec4d q_wo_tmp; cv::Mat t_wo_tmp, R_wo_tmp;
-                    std::vector<cv::Point2f> imgPts = {
-                        init_plate.armor_point[0], init_plate.armor_point[1],
-                        init_plate.armor_point[2], init_plate.armor_point[3]
-                    };
-                    
-                    if (estimator.estimatePose(objPts, imgPts, q_wo_tmp, t_wo_tmp, R_wo_tmp)) {
-                        Eigen::Matrix3d R_eigen = armor_model::cvMatToEigen3d(R_wo_tmp);
-                        Eigen::Vector3d t_eigen = armor_model::cvMatToEigenVec(t_wo_tmp);
-                        
-                        T_init.linear() = R_eigen;
-                        // 注意：这里用装甲板位姿近似整车位姿，有 30cm 的初始偏差
-                        T_init.translation() = t_eigen / 1000.0; 
-                        has_init_pose = true;
-                    }
-
-                    // 如果有观测数据，则执行 LM 非线性优化
-                    if (!obs.armors.empty() && has_init_pose) {
-                        auto opt_result = optimizer.optimizeSingleFrame(obs, T_init, false, false, false);
-                        
-                        // 去掉严格的 converged 判断强制渲染！
-                        matImage = armor_model::ModelVisualizer::render3DView(
-                            optimizer.getModel(), opt_result.T_cam_object, am_cam, matImage, &obs);
-                    }
-                }
                 ////////////////
                 */
-
-                // for(auto& pnppose : armor){
-                //     if (pnppose.armor_point == nullptr) continue;
-                //     std::vector<cv::Point2f> imgPts = {
-                //     pnppose.armor_point[0], pnppose.armor_point[1],
-                //     pnppose.armor_point[2], pnppose.armor_point[3]
-                //     };
-                //     if (estimator.estimatePose(objPts, imgPts, q_wo, t_wo, R_wo)) {
-                //         drawCube(matImage, R_wo, t_wo,
-                //                 cameraMatrix,
-                //                 distCoeffs);
-                //     }else{continue;}
-                // }
-
-                
-                // // 此处为字符识别部分，采用新集成的 ONNX 识别算法
-                // for(auto& cnt_string : armor){
-                //     // FeatureDetector8Classes detector;  // 淘汰的 SVM 算法
-                //     cv::Mat ROI;
-                //     CropAndResize(cnt_string, matImage, ROI);
-                //     cnt_string.ID = onnx_detector.detect(ROI, cnt_string);
-                // }
 
                 
                 // 将疑似装甲板全部绘制出来       并配上识别字符
