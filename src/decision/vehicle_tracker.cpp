@@ -187,40 +187,67 @@ Eigen::MatrixXd VehicleTracker::getArmorJacobian(const Eigen::VectorXd& x, int i
 
 int VehicleTracker::matchArmor(const Eigen::Vector3d& t_cam_armor, const Eigen::Matrix3d& R_cam_armor) const {
     Eigen::Vector3d t_world_armor(t_cam_armor.z(), -t_cam_armor.x(), -t_cam_armor.y());
-    Eigen::Vector3d ypd_in_world = xyz2ypd(t_world_armor);
-    
-    // 提取在相机坐标系下的法向量 (指向车体内部，使得正面装甲板的yaw在世界系为0)
+    Eigen::Vector3d ypd_obs = xyz2ypd(t_world_armor);
+
+    // 提取观测法向量（指向车体内部）在世界坐标系下的朝向角
     Eigen::Vector3d N_cam = R_cam_armor.col(2);
     Eigen::Vector3d N_world(N_cam.z(), -N_cam.x(), -N_cam.y());
-    double face_yaw = std::atan2(N_world.y(), N_world.x());
-    
-    // 获取四个预测装甲板的状态，并按距离(ypd[2])排序，只取最近的 3 个，剔除背面的装甲板
-    std::vector<std::pair<int, Eigen::Vector3d>> predicted_armors;
-    for (int id = 0; id < armor_num_; ++id) {
-        predicted_armors.push_back({id, xyz2ypd(getArmorXYZ(ekf_.x, id))});
-    }
-    std::sort(predicted_armors.begin(), predicted_armors.end(),
-              [](const std::pair<int, Eigen::Vector3d>& a, const std::pair<int, Eigen::Vector3d>& b) {
-                  return a.second[2] < b.second[2];
-              });
-              
-    int best_id = 0;
+    double face_yaw_obs = std::atan2(N_world.y(), N_world.x());
+
+    // 当前估计角速度，用于方向性惩罚
+    double vyaw = ekf_.x(7);
+
+    int best_id = -1;
     double min_error = 1e9;
-    
-    for (int i = 0; i < 3 && i < armor_num_; ++i) {
-        int id = predicted_armors[i].first;
-        Eigen::Vector3d ypd_pred = predicted_armors[i].second;
+
+    // ── 第一遍：带法向量硬约束的加权匹配 ──────────────────────────────────
+    // 遍历所有装甲板（不再只取最近3个），用法向量硬截止过滤不可能的候选，
+    // 防止 EKF 把转走的板预测到新板位置后被错误接受。
+    for (int id = 0; id < armor_num_; ++id) {
         double face_yaw_pred = limit_rad(ekf_.x(6) + id * 2.0 * CV_PI / armor_num_);
-        
-        // 角度误差 = 位置的偏航角误差 + 装甲板自身朝向角误差
-        double error = std::abs(limit_rad(ypd_in_world[0] - ypd_pred[0])) + 
-                       std::abs(limit_rad(face_yaw - face_yaw_pred));
-                       
-        if (error < min_error) {
-            min_error = error;
+        double face_diff = std::abs(limit_rad(face_yaw_obs - face_yaw_pred));
+
+        // 硬约束：法向量偏差超过 90° 说明该板朝向与观测严重不符，直接跳过
+        if (face_diff > CV_PI / 2.0) continue;
+
+        Eigen::Vector3d ypd_pred = xyz2ypd(getArmorXYZ(ekf_.x, id));
+
+        // 位置误差：水平角(yaw)权重更高，因为装甲板在水平方向区分度更好
+        double pos_error = std::abs(limit_rad(ypd_obs[0] - ypd_pred[0])) * 2.0
+                         + std::abs(ypd_obs[1] - ypd_pred[1]);
+
+        // 法向量误差
+        double face_error = face_diff;
+
+        // vyaw 方向性惩罚：
+        // 车辆旋转时，EKF 可能把"已转走的板"预测到"新板"的位置，
+        // 对法向量偏差大的候选按角速度大小追加惩罚，使其分数劣于真正朝向一致的候选。
+        double vyaw_penalty = face_diff * std::min(std::abs(vyaw), 4.0) * 0.25;
+
+        double total_error = pos_error + face_error + vyaw_penalty;
+        if (total_error < min_error) {
+            min_error = total_error;
             best_id = id;
         }
     }
+
+    // ── 第二遍（兜底）：若所有候选都被硬约束过滤，回退到最小综合误差 ───────
+    // 此情况通常发生在 EKF 刚初始化或状态大幅漂移时
+    if (best_id == -1) {
+        min_error = 1e9;
+        for (int id = 0; id < armor_num_; ++id) {
+            double face_yaw_pred = limit_rad(ekf_.x(6) + id * 2.0 * CV_PI / armor_num_);
+            double face_diff = std::abs(limit_rad(face_yaw_obs - face_yaw_pred));
+            Eigen::Vector3d ypd_pred = xyz2ypd(getArmorXYZ(ekf_.x, id));
+            double pos_error = std::abs(limit_rad(ypd_obs[0] - ypd_pred[0])) * 2.0;
+            double total_error = pos_error + face_diff;
+            if (total_error < min_error) {
+                min_error = total_error;
+                best_id = id;
+            }
+        }
+    }
+
     return best_id;
 }
 
