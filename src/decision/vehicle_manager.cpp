@@ -3,7 +3,7 @@
  * @author jokit
  * @date 2026-07-15
  */
-#include vision_system/decision/vehicle_manager.hpp
+#include "vision_system/decision/vehicle_manager.hpp"
 
 VehicleNode::VehicleNode(const std::string& id, const armor_model::Camera& cam) 
     : vehicle_id(id), cam_(cam) 
