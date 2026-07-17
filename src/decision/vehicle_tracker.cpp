@@ -63,7 +63,7 @@ VehicleTracker::VehicleTracker(const armor_model::ArmorObservation& init_obs, in
     double face_yaw = std::atan2(N_world.y(), N_world.x());
     
     // 从缓存参数或默认值初始化半径和高度偏移
-    double r_init = params.valid ? params.r : 0.25;
+    double r_init = params.valid ? params.r : 0.20;
     double dz_init = params.valid ? params.dz : 0.0;
     double h_init = params.valid ? params.h : 0.1;
 
