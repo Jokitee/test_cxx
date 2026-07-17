@@ -2,7 +2,7 @@
 // fire_control_planner.cpp
 // RoboMaster 自瞄决策规划器 — 实现
 // ============================================================
-#include "fire_control_planner.hpp"
+#include "vision_system\decision\fire_control_planner.hpp"
 
 #include <cmath>
 #include <algorithm>
