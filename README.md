@@ -1,144 +1,369 @@
-# 测试以及学习MindVision摄像头项目
-## 前言
-*本内容为作者学习使用MindVision摄像头并验证各种算法的测试工具*  
-> 系统性能不取决于最强环节，而取决于各部分的协同效率——《工程控制论》 钱学森  
----
+# 视觉识别系统框架设计文档
 
-## 目录
-- [第一节 项目架构简介](#项目架构)
-- [第二节 装甲板识别逻辑](#装甲板识别逻辑)
-    - [2.1 摄像头配置](#摄像头配置)
-    - [2.2 灯条检测](#灯条的检测)
-    - [2.3 装甲板检测](#)
+## 1. 概述
 
+### 1.1 设计目标
+- 构建模块化、可扩展的视觉识别系统
+- 支持类似 ROS2 的消息订阅/发布机制
+- 实现图像处理、目标分类、状态估计等核心功能
 
-## 项目架构
-```
-test_cxx/
-├── assets/
-│   ├── camera.yaml     //  摄像机内参文件 （用作位姿解算，目前还没有测试）
-|   └── svm_model.xml   //  数字识别权重文件（目前只支持 1 3 sentinel ）
-├── src/
-│    ├── main.cpp       // 主要执行文件，包含摄像头配置以及灯条检测等内容
-│    ├── classify.cpp   // 用于装甲板的数字特征识别，SVM
-│    ├── pnpsolver.cpp  // 用于Pnp解算位姿，目前没有验证，只是基于算法进行编写
-│    └── test.cpp       // 用于验证装甲板数字识别的实验性文件，如果要使用须在xmake对于的位置进行消除注释，并自行准备好装甲板区域特征图片
-└── xmake.lua           // 编译文件........
-
-```
+### 1.2 架构特点
+- 模块化设计，各组件独立运行
+- 消息驱动，松耦合通信
+- 支持多传感器输入与多任务并行处理
 
 ---
-## 装甲板识别逻辑
 
+## 2. 核心模块架构
 
-### 摄像头配置
-摄像头配置方面，我的调节逻辑为在MindVision官方驱动软件Windows版本进行调节，并记入对应的数值，在main读取时进行配置。
-
-### 灯条的检测及其配对
-灯条的检测我有两个**先置条件**：
-1：摄像头已经配置好参数，获取的图像就已经处理过了。
-```cpp
-/**
-	* @brief 设置摄像头的曝光以及增益
-    * 位于main的301； 
-*/
-CameraSetAeState(hCamera, false);                          
-setStatues = CameraSetExposureTime(hCamera, 5000);
-CameraSetGain(hCamera, 100, 70, 50);
+### 2.1 模块总览
 ```
-2.对于图像有如下处理。
-```cpp
-/**
-	* @brief 单独分离出红色通道并进行形态检测
-    * 位于main的330； 
-    * 实践发现如果加入高斯以及膨胀等形态学处理会导致实际的效果减半：可能原因是将原本的高值进行了加权平均，导致效果下降。
-*/
-std::vector<cv::Mat> channels;
-cv::split(matImage, channels);
-cv::Mat r = channels[2];
-cv::Mat mask;
-cv::threshold(r, mask, 150, 255, cv::THRESH_BINARY);
-// cv::Mat kernel = getStructuringElement(MORPH_RECT, Size(5, 5));
-// dilate(mask, r, kernel);
-std::vector<std::vector<cv::Point>> counters;
-cv::findContours(mask, counters, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-std::vector<cv::RotatedRect> end_rects;
+┌─────────────────────────────────────────────────────────────┐
+│                      视觉识别系统 (Vision System)              │
+├──────────────┬──────────────┬──────────────┬─────────────────┤
+│   输入层      │   处理层      │   决策层      │    输出层        │
+│  (Input)     │ (Processing) │ (Decision)   │   (Output)      │
+├──────────────┼──────────────┼──────────────┼─────────────────┤
+│ • 相机订阅    │ • 图像处理器   │ • 分类器      │ • 目标发布      │
+│ • 传感器融合  │ • 特征提取器   │ • 状态估计器   │ • 状态广播      │
+│ • 外部触发    │ • 数据增强     │ • 跟踪器      │ • 可视化输出    │
+└──────────────┴──────────────┴──────────────┴─────────────────┘
 ```
-接下来就是**灯条的检测部分**
-```cpp
-/**
-	* @brief 将灯条进行面积以及长宽比检测，以及合理角度角度检测
-    * 位于main的330； 
-    * 为了便于控制检测阈值，处理方法为实时进行打印当前灯条的值。
-*/
- // 灯条检测逻辑
-            for(auto& cnt : counters){
-                cv::RotatedRect rotRect = cv::minAreaRect(cnt);
 
-                // 面积检测筛选
-                float area = rotRect.size.width * rotRect.size.height;
-                if (area < 50 || area > 9000) continue;
+---
 
-                // 灯条比例筛选
-                float width = std::min(rotRect.size.width, rotRect.size.height);
-                float height = std::max(rotRect.size.width, rotRect.size.height);
-                float ratio = height / width;
-                if (ratio < 4 || ratio > 15) continue;
+## 3. 详细模块设计
 
-                // 灯条合理角度筛选
-                if(getright_angle(rotRect) < 5 || getright_angle(rotRect) > 175)continue;
+### 3.1 输入层 (Input Layer)
 
-                end_rects.push_back(rotRect);
+#### 3.1.1 图像采集模块 (Image Acquisition)
+- **功能**：订阅相机/传感器原始图像数据
+- **消息类型**：`sensor_msgs/Image`, `sensor_msgs/CompressedImage`
+- **接口设计**：
+  - `subscribe(topic, callback)` — 订阅图像话题
+  - `set_qos(qos_profile)` — 配置 QoS 策略
+  - `get_frame_rate()` — 获取当前帧率
 
-                cv::Point2f pts[4];
-                rotRect.points(pts);
-                for (int i = 0; i < 4; i++)
-                {
-                    cv::line(matImage, pts[i], pts[(i+1)%4], cv::Scalar(0,255,0), 2);
-                }
-            }
+#### 3.1.2 多源数据融合 (Multi-Source Fusion)
+- **功能**：整合多相机、深度传感器、IMU 等数据
+- **消息类型**：自定义融合消息
+- **同步策略**：时间戳对齐、帧同步
+
+#### 3.1.3 外部触发接口 (External Trigger)
+- **功能**：接收外部系统触发信号
+- **消息类型**：`std_msgs/Bool`, 自定义触发消息
+
+---
+
+### 3.2 处理层 (Processing Layer)
+
+#### 3.2.1 图像处理器 (Image Processor)
+- **功能**：对原始图像进行预处理与增强
+- **子模块**：
+  - **预处理管道 (Preprocessing Pipeline)**
+    - 图像去噪（高斯滤波、中值滤波）
+    - 色彩空间转换（BGR ↔ RGB ↔ HSV ↔ LAB）
+    - 图像归一化与尺寸调整
+  - **数据增强模块 (Data Augmentation)**
+    - 随机裁剪、翻转、旋转
+    - 亮度/对比度/饱和度调整
+    - Mosaic / MixUp 等高级增强
+  - **图像分割 (Image Segmentation)**
+    - 语义分割
+    - 实例分割
+    - 全景分割
+- **消息类型**：`vision_msgs/ProcessedImage`
+
+#### 3.2.2 特征提取器 (Feature Extractor)
+- **功能**：从图像中提取高层语义特征
+- **支持的骨干网络**：
+  - ResNet / ResNeXt / EfficientNet
+  - Vision Transformer (ViT)
+  - Swin Transformer
+  - 自定义轻量化网络
+- **输出**：特征向量 / 特征图
+
+#### 3.2.3 感兴趣区域提取 (ROI Extractor)
+- **功能**：从图像中提取目标候选区域
+- **方法**：
+  - Selective Search
+  - RPN (Region Proposal Network)
+  - 传统图像处理（边缘检测、轮廓提取）
+
+---
+
+### 3.3 决策层 (Decision Layer)
+
+#### 3.3.1 分类器 (Classifier)
+- **功能**：对目标进行类别判定
+- **分类类型**：
+  - **图像级分类 (Image Classification)**
+    - 单标签分类
+    - 多标签分类
+    - 层次分类
+  - **目标级分类 (Object Classification)**
+    - 基于 ROI 的分类
+    - 属性识别（颜色、类型、状态）
+- **模型支持**：
+  - 传统机器学习（SVM、随机森林）
+  - 深度学习（CNN、Transformer）
+  - 集成学习
+- **消息类型**：`vision_msgs/ClassificationResult`
+
+#### 3.3.2 检测器 (Detector)
+- **功能**：定位并识别图像中的目标
+- **检测范式**：
+  - 两阶段检测（R-CNN 系列）
+  - 单阶段检测（YOLO、SSD、RetinaNet）
+  - 无锚框检测（FCOS、CenterNet）
+  - 基于 Transformer 的检测（DETR、Deformable DETR）
+- **输出格式**：边界框 + 类别 + 置信度
+
+#### 3.3.3 状态估计器 (State Estimator)
+- **功能**：估计目标的动态状态与运动参数
+- **估计内容**：
+  - **位姿估计 (Pose Estimation)**
+    - 2D 关键点检测
+    - 3D 姿态估计（单目 / 双目 / 深度相机）
+    - 6DoF 位姿估计
+  - **运动状态估计 (Motion State Estimation)**
+    - 速度、加速度估计
+    - 轨迹预测
+  - **状态滤波 (State Filtering)**
+    - 卡尔曼滤波 (Kalman Filter)
+    - 扩展卡尔曼滤波 (EKF)
+    - 无迹卡尔曼滤波 (UKF)
+    - 粒子滤波 (Particle Filter)
+- **消息类型**：`vision_msgs/ObjectState`
+
+#### 3.3.4 目标跟踪器 (Tracker)
+- **功能**：跨帧关联同一目标，维持目标 ID
+- **跟踪策略**：
+  - 单目标跟踪 (SOT)：SiamRPN、DiMP、STARK
+  - 多目标跟踪 (MOT)：SORT、DeepSORT、ByteTrack、OC-SORT
+  - 多目标多相机跟踪 (MTMC)
+- **关联方法**：
+  - IOU 匹配
+  - 外观特征匹配（Re-ID）
+  - 运动预测匹配
+- **消息类型**：`vision_msgs/TrackedObjects`
+
+---
+
+### 3.4 输出层 (Output Layer)
+
+#### 3.4.1 结果发布器 (Result Publisher)
+- **功能**：将识别结果发布到指定话题
+- **发布内容**：
+  - 检测框、分类标签、置信度
+  - 目标状态（位置、速度、姿态）
+  - 跟踪 ID 与轨迹
+- **消息类型**：
+  - `vision_msgs/Detection2D` / `vision_msgs/Detection3D`
+  - `vision_msgs/Classification`
+  - `vision_msgs/ObjectState`
+
+#### 3.4.2 可视化模块 (Visualization)
+- **功能**：渲染识别结果，生成可视化输出
+- **可视化内容**：
+  - 边界框绘制（含标签、置信度）
+  - 关键点 / 骨架渲染
+  - 轨迹绘制
+  - 热力图 / 注意力图
+- **输出形式**：
+  - 实时显示窗口
+  - 视频流输出
+  - 图像文件保存
+
+#### 3.4.3 数据记录器 (Data Logger)
+- **功能**：记录识别过程与结果
+- **记录内容**：
+  - 原始图像与处理结果
+  - 识别日志（时间戳、类别、置信度）
+  - 性能指标（推理时间、FPS、准确率）
+
+---
+
+## 4. 消息系统设计
+
+### 4.1 消息类型定义
+
+| 消息名称 | 用途 | 关键字段 |
+|---------|------|---------|
+| `RawImage` | 原始图像输入 | `header`, `data`, `encoding`, `width`, `height` |
+| `ProcessedImage` | 处理后图像 | `header`, `image`, `preprocessing_params` |
+| `FeatureVector` | 特征向量 | `header`, `features`, `layer_name` |
+| `Detection2D` | 2D 检测结果 | `header`, `bbox`, `class_id`, `score` |
+| `Detection3D` | 3D 检测结果 | `header`, `bbox3d`, `class_id`, `score` |
+| `ClassificationResult` | 分类结果 | `header`, `class_id`, `class_name`, `confidence`, `top_k` |
+| `ObjectState` | 目标状态 | `header`, `pose`, `velocity`, `acceleration`, `covariance` |
+| `TrackedObject` | 跟踪目标 | `header`, `track_id`, `detection`, `state`, `age` |
+| `TrackedObjects` | 跟踪目标列表 | `header`, `tracks[]` |
+
+### 4.2 消息 QoS 策略
+- **可靠传输 (Reliable)**：关键识别结果（如安全相关）
+- **尽力传输 (Best Effort)**：实时视频流、可视化数据
+- **历史保留 (History)**：配置队列深度与保留策略
+
+---
+
+## 5. 管道与调度设计
+
+### 5.1 处理管道 (Processing Pipeline)
 ```
-接下来就是**灯条的配对部分**
-```cpp
-/**
-	* @brief 将灯条进行合理距离/长度以及偏差角度检测
-    * 位于main的369； 
-    * 为了便于控制检测阈值，处理方法为实时进行打印当前灯条的值。
-*/
-if(end_rects.size() >= 2){
-    // 灯条配对逻辑
-    for(size_t i = 0; i < end_rects.size()-1; i++){
-        for(size_t j = i + 1; j < end_rects.size(); j++){
- 
-            /*
-            *****    灯条匹配逻辑      ******
-            */
-            // 倾斜角度偏差检测
-            float angle_TF = getright_angle(end_rects[i]) - getright_angle(end_rects[j]);
-            if (fabs(angle_TF) > 6.5)continue;
-
-            // 灯条距离与灯条长度比值检测
-            float first_max = std::max(end_rects[i].size.width, end_rects[i].size.height);
-            float second_max = std::max(end_rects[j].size.width, end_rects[j].size.height);
-            float getheight = sqrt(pow(end_rects[i].center.x - end_rects[j].center.x, 2)+pow(end_rects[i].center.y - end_rects[j].center.y, 2));
-            float getlight = (first_max + second_max) / 2;
-            float distance_TF = getheight / getlight;
-            if (distance_TF > 3.0 || distance_TF < 2.3)continue;
-
-            /*
-            *****   灯条归位并定点    *****
-            */
-            lightbors armor_light;
-
-            if(end_rects[i].center.x < end_rects[j].center.x){
-                armor_light.left_lightbors = end_rects[i];
-                armor_light.right_lightbors = end_rects[j];
-            }else{
-                armor_light.left_lightbors = end_rects[j];
-                armor_light.right_lightbors = end_rects[i];
-            }
+原始图像 → [预处理] → [特征提取] → [检测/分类] → [跟踪] → [状态估计] → 结果输出
+                ↓              ↓              ↓           ↓
+           图像增强       多尺度特征      NMS 后处理   卡尔曼滤波
 ```
-### 装甲板检测
-在上面我们已经完成了灯条的检测及其配对，接下来就是要将装甲板检测出来。
 
-**逻辑**：检测装甲板中间的特征符号。未完待续......
+### 5.2 调度策略
+- **串行管道**：单线程顺序执行，适合低延迟场景
+- **并行管道**：多线程/多进程并行处理，适合高吞吐场景
+- **流水线 (Pipeline)**：GPU 异步执行，最大化硬件利用率
+
+### 5.3 动态配置
+- 支持运行时调整处理参数
+- 支持模型热切换
+- 支持模块动态加载/卸载
+
+---
+
+## 6. 配置与管理
+
+### 6.1 配置文件结构
+```yaml
+vision_system:
+  input:
+    camera_topics:
+      - /camera/front/image_raw
+      - /camera/rear/image_raw
+    qos_profile: best_effort
+
+  processing:
+    preprocessor:
+      resize: [640, 480]
+      normalize: true
+      augmentation: false
+
+    feature_extractor:
+      backbone: resnet50
+      pretrained: true
+      freeze_layers: [0, 1, 2]
+
+  decision:
+    detector:
+      model: yolov8n
+      conf_threshold: 0.5
+      nms_threshold: 0.45
+
+    classifier:
+      model: efficientnet_b0
+      num_classes: 10
+
+    state_estimator:
+      filter_type: kalman
+      process_noise: 0.01
+      measurement_noise: 0.1
+
+    tracker:
+      algorithm: bytetrack
+      track_buffer: 30
+      match_threshold: 0.8
+
+  output:
+    publish_results: true
+    visualization: true
+    save_logs: true
+```
+
+### 6.2 运行时管理
+- **参数服务器**：集中管理全局配置参数
+- **动态重配置 (Dynamic Reconfigure)**：运行时调整参数
+- **模块生命周期管理**：启动、停止、重启各模块
+
+---
+
+## 7. 性能与优化
+
+### 7.1 推理加速
+- **硬件加速**：
+  - NVIDIA GPU (CUDA / TensorRT)
+  - Intel OpenVINO
+  - ARM NN / Mali GPU
+  - NPU / TPU 专用芯片
+- **模型优化**：
+  - 量化 (INT8 / FP16)
+  - 剪枝 (Pruning)
+  - 知识蒸馏 (Knowledge Distillation)
+  - 模型转换 (ONNX / TensorRT Engine)
+
+### 7.2 性能监控
+- 实时 FPS 监控
+- 各模块延迟统计
+- GPU/CPU 利用率追踪
+- 内存占用监控
+
+---
+
+## 8. 扩展接口
+
+### 8.1 插件系统
+- **自定义处理器**：实现 `ImageProcessor` 接口
+- **自定义分类器**：实现 `Classifier` 接口
+- **自定义跟踪器**：实现 `Tracker` 接口
+- **自定义状态估计器**：实现 `StateEstimator` 接口
+
+### 8.2 外部系统集成
+- **ROS2 集成**：原生 ROS2 节点，支持标准消息
+- **MQTT 集成**：物联网场景轻量级通信
+- **REST API**：HTTP 接口，支持 Web 端调用
+- **gRPC 接口**：高性能 RPC 通信
+
+---
+
+## 9. 部署与运维
+
+### 9.1 部署方式
+- **本地部署**：单机运行，适合边缘设备
+- **分布式部署**：多节点集群，适合大规模场景
+- **容器化部署**：Docker / Kubernetes
+
+### 9.2 日志与诊断
+- **结构化日志**：JSON 格式，便于解析
+- **分级日志**：DEBUG / INFO / WARN / ERROR / FATAL
+- **诊断工具**：
+  - 节点状态检查
+  - 话题流量监控
+  - 延迟分析工具
+
+---
+
+## 10. 附录
+
+### 10.1 术语表
+| 术语 | 说明 |
+|------|------|
+| ROS2 | Robot Operating System 2，机器人操作系统 |
+| QoS | Quality of Service，服务质量策略 |
+| NMS | Non-Maximum Suppression，非极大值抑制 |
+| Re-ID | Person Re-Identification，行人重识别 |
+| 6DoF | 6 Degrees of Freedom，六自由度位姿 |
+
+### 10.2 参考文档
+- ROS2 官方文档
+- vision_msgs 标准消息定义
+- 各检测/跟踪/分类算法原始论文
+
+---
+
+## 当前项目的不足
+
+1: 暂未完成对**蓝色**方的识别。*****  
+2：对于通信以及自瞄决策器未实现检验。***  
+3：对于初步检测的armor我认为还有优化空间，数据流的直接处理导致后续解算会出现很多误差。 *****  
+4：项目结构还不够完善，部分内容过于冗余。 ***  
+
+
+*文档版本：v1.0*
+*笔者：Jokit*
+*最后更新：2026-07-17*
