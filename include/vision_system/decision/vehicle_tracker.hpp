@@ -33,6 +33,8 @@ public:
     // x vx y vy z vz yaw vyaw r l h
     // 0  1  2  3  4  5   6    7   8 9 10
 
+    Eigen::Vector3d getArmorXYZ(const Eigen::VectorXd& x, int id) const;
+
     armor_model::Pose getCurrentPose() const;
     void updateVehicleModel(armor_model::VehicleModel& model) const;
 
@@ -43,8 +45,6 @@ private:
     ExtendedKalmanFilter ekf_;
     int64_t t_; // milliseconds
     int armor_num_ = 4;
-
-    Eigen::Vector3d getArmorXYZ(const Eigen::VectorXd& x, int id) const;
     Eigen::MatrixXd getArmorJacobian(const Eigen::VectorXd& x, int id) const;
 
     static double limit_rad(double angle);
