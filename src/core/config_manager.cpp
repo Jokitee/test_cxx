@@ -45,6 +45,8 @@ ConfigManager::ConfigManager(const std::string& file_path) {
     det_cfg_.angle_max = (float)det["angle_max"];
     det_cfg_.distance_min = (float)det["distance_min"];
     det_cfg_.distance_max = (float)det["distance_max"];
+    det_cfg_.length_max = (float)det["length_max"];
+    det_cfg_.length_min = (float)det["length_min"];
 
     cv::FileNode ui = fs["UI"];
     ui_cfg_.show_window = (int)ui["show_window"] != 0;

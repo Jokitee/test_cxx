@@ -53,7 +53,9 @@ std::vector<lightbors> ArmorDetector::detect(const cv::Mat& matImage) {
                 float getheight = std::sqrt(std::pow(end_rects[i].center.x - end_rects[j].center.x, 2) + std::pow(end_rects[i].center.y - end_rects[j].center.y, 2));
                 float getlight = (first_max + second_max) / 2;
                 float distance_TF = getheight / getlight;
-                
+                float length_TF = first_max / second_max;
+
+                if(length_TF > cfg_.length_max || length_TF < cfg_.length_min) continue;
                 if (distance_TF > cfg_.distance_max || distance_TF < cfg_.distance_min) continue;
 
                 lightbors armor_light;

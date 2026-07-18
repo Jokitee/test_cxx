@@ -18,6 +18,7 @@ struct DetectorConfig {
     float area_min, area_max;
     float ratio_min, ratio_max;
     float angle_min, angle_max;
+    float length_min, length_max;
     float distance_min, distance_max;
 };
 

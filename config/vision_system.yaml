@@ -27,6 +27,8 @@ Detector:
   angle_max: 175.0
   distance_min: 1.0
   distance_max: 2.6
+  length_min: 0.85
+  length_max: 1.15
 
 UI:
   show_window: 1       # 1=显示窗口, 0=关闭窗口(无头模式运行)
