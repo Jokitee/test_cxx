@@ -65,6 +65,10 @@ Pipeline::~Pipeline() {
     stop();
 }
 
+void Pipeline::registerArmorCallback(const ArmorCallback& cb) {
+    armor_callbacks_.push_back(cb);
+}
+
 void Pipeline::start() {
     if (!config_.isLoaded()) {
         Logger::log(LogLevel::ERROR, ErrorCode::CONFIG_LOAD_FAILED, "Pipeline setup aborted due to config error.");
@@ -188,6 +192,16 @@ void Pipeline::processLoop() {
         // 3. 消息发布: 丢给车辆管理器进行跟踪、聚合与内部模型迭代
         if (config_.getModulesConfig().enable_pnp) {
             vehicle_manager.update(armors, current_frame.timestamp);
+            
+            // 触发外部订阅的回调函数
+            for (auto& pair : vehicle_manager.getNodes()) {
+                VehicleNode& node = pair.second;
+                if (node.is_tracking && !node.latest_obs.armors.empty()) {
+                    for (const auto& cb : armor_callbacks_) {
+                        cb(node.vehicle_id, node.latest_obs.armors);
+                    }
+                }
+            }
         }
 
         // ============================================

@@ -75,6 +75,24 @@ void VehicleNode::processFrame(int64_t timestamp, PoseEstimator& estimator, visi
         }
     }
     
+    // 对装甲板角点数据进行一阶低通滤波
+    double alpha = 0.3; // 滤波系数
+    for (auto& obs_armor : latest_obs.armors) {
+        int plate_id = obs_armor.plate_id;
+        if (filtered_corners_.find(plate_id) == filtered_corners_.end() || 
+            timestamp - last_corner_update_time_[plate_id] > 500) {
+            // 初始化或超时重置
+            filtered_corners_[plate_id] = obs_armor.corners_img;
+        } else {
+            for (int i = 0; i < 4; ++i) {
+                filtered_corners_[plate_id][i].x = alpha * obs_armor.corners_img[i].x + (1.0 - alpha) * filtered_corners_[plate_id][i].x;
+                filtered_corners_[plate_id][i].y = alpha * obs_armor.corners_img[i].y + (1.0 - alpha) * filtered_corners_[plate_id][i].y;
+            }
+        }
+        last_corner_update_time_[plate_id] = timestamp;
+        obs_armor.corners_img = filtered_corners_[plate_id];
+    }
+    
     // 如果尚未初始化 tracker，使用当前帧的主装甲板来初始化
     if (!tracker_initialized) {
         const armor_model::ArmorObservation& init_obs = latest_obs.armors[0];

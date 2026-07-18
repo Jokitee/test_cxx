@@ -7,6 +7,9 @@
 #include <condition_variable>
 #include <opencv2/opencv.hpp>
 
+#include <functional>
+#include <vector>
+
 #include "vision_system/core/config_manager.hpp"
 #include "vision_system/input/camera_wrapper.hpp"
 #include "vision_system/decision/armor_detector.hpp"
@@ -29,6 +32,10 @@ public:
     void start();
     void stop();
     bool isRunning() const { return is_running_; }
+
+    // 订阅回调接口
+    using ArmorCallback = std::function<void(const std::string& vehicle_id, const std::vector<armor_model::ArmorObservation>& filtered_armors)>;
+    void registerArmorCallback(const ArmorCallback& cb);
 
 private:
     void cameraLoop();
@@ -63,6 +70,9 @@ private:
     // 决策规划器
     rma::FireControlPlanner planner_;
     
+    // 订阅回调函数列表
+    std::vector<ArmorCallback> armor_callbacks_;
+
     // 系统资源探测
     unsigned int num_cores_;
 };

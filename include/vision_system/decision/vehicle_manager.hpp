@@ -40,6 +40,11 @@ public:
     int64_t last_timestamp = 0;
     bool tracker_initialized = false;
     
+    // 缓存上一次滤波后的角点，key为 plate_id (0-3)
+    std::map<int, std::array<cv::Point2f, 4>> filtered_corners_;
+    // 记录每个 plate_id 上一次更新的时间戳，防止很久没更新时发生突变
+    std::map<int, int64_t> last_corner_update_time_;
+
     // 为了兼容旧代码提供一个 vehicle model
     armor_model::VehicleModel getVehicleModel() const;
 };
