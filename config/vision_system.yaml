@@ -25,10 +25,10 @@ Detector:
   ratio_max: 18.0
   angle_min: 5.0
   angle_max: 175.0
-  distance_min: 1.0
+  distance_min: 0.9
   distance_max: 2.6
-  length_min: 0.85
-  length_max: 1.15
+  length_min: 0.45
+  length_max: 1.55
 
 UI:
   show_window: 1       # 1=显示窗口, 0=关闭窗口(无头模式运行)
